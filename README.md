@@ -18,6 +18,7 @@ typora-root-url: ./
 		└── 03-03原始风场与修订后的rmse叠加显示.ipynb 		    #2
 │   ├── model_train  # 训练模型的代码
 │   │   └── 04-01 LSTM.py  # 训练模型代码  
+│   ├── release_main  # 发行版——最终的流程
 │   ├── utils  # 工具目录  
 		└── common.py  # 公共工具类
 			└── def get_realdata_df # 读取 fub 实况数据并返回 dataframe
@@ -117,6 +118,12 @@ _________________________________________________________________
 read_file_path: str = r'Z:/FUB/MF01001/2024_local.csv'
 out_put_file_path: str = r'Z:/FUB/MF01001/2024_local_df_utc_183.csv'
 ```
+
+
+
+##### 项目主要流程的main分支见`release_main`目录
+
+
 
 
 
