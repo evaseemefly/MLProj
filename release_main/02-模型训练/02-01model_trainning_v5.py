@@ -33,22 +33,14 @@ def to_do():
 
     :return:
     """
-    # vals
-    # mac
-    # forecast_path: str = r'/Volumes/DATA/01TRAINNING_DATA/WIND/01/df_ws_forecast.csv'
-    # realdata_path: str = r'/Volumes/DATA/FUB/MF01001/2024_local_df_utc_filter.csv'
-    # win
-    # forecast_path: str = r'Z:\01TRAINNING_DATA\standard\df_ws_forecast.csv'
-    # realdata_path: str = r'Z:\01TRAINNING_DATA\standard\2024_local_df_utc_filter.csv'
-    # model_path: str = r'G:\05DATA\02MODELS\fit_model_250603.h5'
     # razer
     # TODO:[-] 25-06-08 新加入的razer配置
     # TODO:[-] 25-07-13 对于 预报 | 实况 数据加入了 warmup 预热数据集
-    forecast_path: str = r'Z:\01TRAINNING_DATA\250713\2024_warmup_dataset_forecast.csv'
+    forecast_path: str = r'Z:\01TRAINNING_DATA\250713\2024_warmup_dataset_forecast_aligned.csv'
     realdata_path: str = r'Z:\01TRAINNING_DATA\250713\2024_warmup_dataset_realdata.csv'
     '''按照三小时一个提取的实况数据路径'''
     # 基于加入了预热数据集的数据进行训练
-    model_path: str = r'Z:\02TRAINNING_MODEL\fit_model_v5_250713.h5'
+    model_path: str = r'Z:\02TRAINNING_MODEL\fit_model_v6_250713.h5'
     scaler_forecast: str = r'Z:\01TRAINNING_DATA\scaler\250713\scaler_forecast.sav'
     scaler_realdata: str = r'Z:\01TRAINNING_DATA\scaler\250713\scaler_realdata.sav'
 
@@ -57,10 +49,17 @@ def to_do():
     df_forecast = pd.read_csv(forecast_path, encoding='utf-8', index_col=0)
     # shape:(61,731)
     df_realdata = pd.read_csv(realdata_path, encoding='utf-8', index_col=0)
+    READDATA_COUNT = 64
     # 实况拼接有问题需要手动去掉最后一列
     # 使用按3小时进行分割的数据不需要去掉最后一列，这样 realdata 与 forecast 的 columns 一致
     # df_realdata = df_realdata.drop(df_realdata.columns[-1], axis=1)
-    df_forecast = df_forecast.iloc[:61, :]
+    # TODO:[*] 25-07-13 注意此处由于数据处理存在bug，forecast 只有 [0,64] , 需调整为 [0,65]
+    """
+        df_forecast.shape: (64, 730)
+        df_realdata.shape: (64, 730)
+    """
+    df_forecast = df_forecast.iloc[:READDATA_COUNT, :]
+    df_realdata = df_realdata.iloc[:READDATA_COUNT, :]
     print(f'df_forecast.shape: {df_forecast.shape}')
     print(f'df_realdata.shape: {df_realdata.shape}')
     pass
@@ -122,7 +121,7 @@ def to_do():
     # 模型构建的步骤:
     # step1: 添加一个 Masking 层，指定输入中值为 0.0 的时刻将被“屏蔽”，即这些时间步不会对后续层产生影响。
     # TODO:[-] 25-06-12 屏蔽是会去掉该时刻的所有数据吗？
-    model.add(Masking(mask_value=0.0, input_shape=(61, 1)))
+    model.add(Masking(mask_value=0.0, input_shape=(64, 1)))
     # step2: 添加双向LSTM层
     # 双向 LSTM 同时从前向和后向处理时序数据，从而捕获更多上下文信息，提升特征提取能力。
     # units=128：LSTM 层中每个方向上有 128 个神经元。
@@ -134,7 +133,7 @@ def to_do():
     # V5 改为: tanh
     model.add(Bidirectional(LSTM(units=256, return_sequences=True,
                                  activation='tanh',
-                                 input_shape=(61, 1))))
+                                 input_shape=(64, 1))))
     # step3: 添加 Dropout 层，在训练时随机将 20% 的神经元输出设为 0。
     # Dropout 是一种正则化方法，有助于防止模型过拟合；通过随机丢弃部分神经元，模型不能过分依赖局部特征，从而提高泛化能力。
     model.add(Dropout(0.2))
@@ -156,7 +155,9 @@ def to_do():
     # TODO:[*] 25-06-12 什么是超参数？
     # loss='mse' 将损失函数设为均方误差（Mean Squared Error），这是回归问题常用的误差度量指标，模型训练的目标就是尽可能使预测值与真实值之间的均方误差最小化。
     # 整体作用 model.compile() 会对模型进行配置，指定训练时用哪个优化器、用哪个损失函数，如果需要，还可以添加额外的评估指标。编译过程会为模型建立必要的计算图，并对参数进行初始化。
-    model.compile(optimizer='adam', loss='mse')
+    model.compile(optimizer='adam',
+                  loss='mse',  # 损失函数总是会被加权（如果提供了权重）
+                  weighted_metrics=['mae', 'mse'])  # 告诉模型，mae和mse这两个验证指标也需要加权计算
 
     # TODO:[*] 前25小时反而加大了原始预报误差，此处加入如下修改：
     # --- 核心改进：为加权损失函数创建权重 ---
@@ -189,7 +190,9 @@ def to_do():
     # batch_size=16 每个训练步骤（step）使用 16 个样本进行梯度计算和模型更新。较小的 batch size 有助于捕捉更多细微变化，但训练时间可能更长；较大的 batch size 则计算稳定但可能导致泛化性下降。
     # validation_data=(X_test, y_test) 在每个 epoch 结束后，模型也会评估一次在验证集上的损失。这有助于监控过拟合情况以及训练过程的稳定性。
     # 将 validation_data 从 (X_test, y_test) 修改为 (X_test, y_test, val_weights)
-    model.fit(X_train, y_train, epochs=10, batch_size=16, validation_data=(X_test, y_test, val_weights))
+    # + 25-07-13 sample_weight=train_weights, # 显式传递训练权重，代码更清晰
+    model.fit(X_train, y_train, epochs=10, batch_size=16, sample_weight=train_weights,
+              validation_data=(X_test, y_test, val_weights))
     model.save(model_path)
 
     pass

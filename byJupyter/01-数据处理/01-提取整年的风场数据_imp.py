@@ -303,8 +303,9 @@ def batch_readncfiles2warmup_byears(previous_file_path: pathlib.Path, current_fi
         # 从该文件中提取指定经纬度的时序数据
         current_filter_ds = current_df.sel(latitude=lat, longitude=lng, method='nearest')
         # 分别取出 u 与 v 分量
-        current_u_vals = current_filter_ds['UGRD_10maboveground'].values[:count]
-        current_v_vals = current_filter_ds['VGRD_10maboveground'].values[:count]
+        # TODO:[-] 25-07-13 注意此处存在bug，[0:count) ，所需此处需要改为 [0:count+1] => [0,count+1)=[0,count]
+        current_u_vals = current_filter_ds['UGRD_10maboveground'].values[:count + 1]
+        current_v_vals = current_filter_ds['VGRD_10maboveground'].values[:count + 1]
 
         # step2: 计算偏差
         #
@@ -315,14 +316,14 @@ def batch_readncfiles2warmup_byears(previous_file_path: pathlib.Path, current_fi
         previous_u_smoothing_vals = previous_u_vals + bias_u
         previous_v_smoothing_vals = previous_v_vals + bias_v
         # TODO:[-] 25-07-09 previous_u_smoothing_vals[最后一个值] 应等于 current_u_vals[0]
-        current_u_vals = current_u_vals[1:count]
-        current_v_vals = current_v_vals[1:count]
+        current_u_split_vals = current_u_vals[1:count]
+        current_v_split_vals = current_v_vals[1:count]
 
         # step4: 将前值置于 current 之前
         # all_u_smoothing_vals = pd.concat([previous_u_smoothing_vals, current_u_vals])
         # all_v_smoothing_vals = pd.concat([previous_v_smoothing_vals, current_v_vals])
-        all_u_smoothing_vals = np.concatenate((previous_u_smoothing_vals, current_u_vals), axis=0)
-        all_v_smoothing_vals = np.concatenate((previous_v_smoothing_vals, current_v_vals), axis=0)
+        all_u_smoothing_vals = np.concatenate((previous_u_smoothing_vals, current_u_split_vals), axis=0)
+        all_v_smoothing_vals = np.concatenate((previous_v_smoothing_vals, current_v_split_vals), axis=0)
         all_abs_smoothing_vals = np.sqrt(all_u_smoothing_vals ** 2 + all_v_smoothing_vals ** 2)
 
         # step3:
@@ -482,7 +483,8 @@ def main():
     # out_put_file_path: str = str(pathlib.Path(out_put_path) / 'GRAPES_2024_24')
     # TODO:[-] 25-06-09 razer 配置
     read_path: str = r'Z:/WIND/GRAPES/2024'
-    out_put_path: str = r'Z:/SOURCE_DATA/2024_warmup_dataset_250709.csv'
+    out_put_path: str = r'Z:/SOURCE_MERGE_DATA/FORECAST/2024_warmup_dataset_250713.csv'
+    out_put_converted_path: str = r'Z:/SOURCE_MERGE_DATA/FORECAST/2024_warmup_converted_dataset_250713.csv'
     lat: float = 39.5003
     lng: float = 120.59533
     # TODO:[-] 25-06-30 加入数据预热
@@ -492,8 +494,17 @@ def main():
 
     # step1: 提取2024年的风场数据，并加入warm_up——预热数据
     # 将文件降序排列
-    df_merge = merge_warmup_dataset(read_path, out_put_path, lat, lng, 2024)
-    df_merge.to_csv(out_put_path)
+    # df_merge = merge_warmup_dataset(read_path, out_put_path, lat, lng, 2024)
+    # df_merge.to_csv(out_put_path)
+
+    # step2: 读取加入预热数据的风场数据，并去掉_abs，重新存储
+    df_warmup: pd.DataFrame = pd.read_csv(out_put_path, index_col=0)
+    convert_columns = pd.to_datetime(df_warmup.columns.str.replace('_abs', ''), format='%Y%m%d%H')
+    df_converted = df_warmup
+    df_converted.columns = convert_columns
+    df_converted.to_csv(out_put_converted_path)
+    # 将df的title去掉 '_abs'
+    pass
 
     # @expired—— 250707
     # step1:批量读取nc文件并提取指定经纬度的72小时数据并拼接成 dataframe
@@ -504,6 +515,7 @@ def main():
     # step2:
     # step2:将上面step1处理的按月保存的72小时浮标站位的时序数据合并为一整年的数据
     merge_df = merge_dataframe(out_put_path)
+
     # merge_full_path: str = str(pathlib.Path(out_put_path) / 'merge.csv')
     # merge_df.to_csv(merge_full_path)
 
