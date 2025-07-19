@@ -32,10 +32,10 @@ import sys
 
 def main():
     rmse_source_path: str = r'Z:\03TRAINNING_EVALUATION_DATA\rmse_forecast_source_250609.csv'
-    rmse_model_path: str = r'Z:\04TRAINNING_EVALUATION_PIC\MODEL_V5\rmse_forecast_2025-07-13.csv'
+    rmse_model_path: str = r'Z:\04TRAINNING_EVALUATION_PIC\MODEL_V7\7.2\rmse_residual_model_2025-07-14.csv'
     rmse_source = pd.read_csv(rmse_source_path)
     rmse_model_fit = pd.read_csv(rmse_model_path)
-    out_put_pic_dic: str = r'Z:\04TRAINNING_EVALUATION_PIC\MODEL_V5'
+    out_put_pic_dic: str = r'Z:\04TRAINNING_EVALUATION_PIC\MODEL_V7\7.2'
     file_name_model_fit: str = pathlib.Path(rmse_model_path).name + '.png'
     out_put_pic_fullpath: str = pathlib.Path(out_put_pic_dic) / file_name_model_fit
 

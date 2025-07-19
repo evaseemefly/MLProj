@@ -1,0 +1,236 @@
+import arrow
+import joblib
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from keras import Sequential
+# TODO:[-] 25-06-03 keras.src 路径是 TensorFlow 2.11 及更高版本中集成在 TensorFlow 内部的 Keras 3 中使用的。
+# from keras.src.layers import LSTM, Dropout, Bidirectional, Dense, Masking
+from keras.layers import LSTM, Dropout, Bidirectional, Dense, Masking
+from pandas import DatetimeIndex
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+# from tensorflow.keras.losses import MeanSquaredError
+# 可视化结果（如果需要）
+import matplotlib.pyplot as plt
+import os
+import pathlib
+import xml.etree.ElementTree as ET
+import xarray as xr
+import codecs
+import datetime
+
+# 先从海浪数据中提取出经纬度，时间，风，海浪高度
+# 解析单个文件，并存于字典内
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+
+# from utils import rmse
+
+
+def to_do():
+    """
+
+    :return:
+    """
+    # razer
+    # TODO:[-] 25-06-08 新加入的razer配置
+    # TODO:[-] 25-07-13 对于 预报 | 实况 数据加入了 warmup 预热数据集
+    forecast_path: str = r'Z:\01TRAINNING_DATA\250713\2024_warmup_dataset_forecast_aligned.csv'
+    realdata_path: str = r'Z:\01TRAINNING_DATA\250713\2024_warmup_dataset_realdata.csv'
+    '''按照三小时一个提取的实况数据路径'''
+    # 基于加入了预热数据集的数据进行训练
+    model_path: str = r'Z:\02TRAINNING_MODEL\fit_model_v7.2_250714.h5'
+    scaler_forecast: str = r'Z:\01TRAINNING_DATA\scaler\250714\scaler_forecast_2.sav'
+    scaler_realdata: str = r'Z:\01TRAINNING_DATA\scaler\250714\scaler_realdata_2.sav'
+
+    # step1: 加载标准化后的 预报 | 实况 数据集
+    # shape: (61,732)
+    df_forecast = pd.read_csv(forecast_path, encoding='utf-8', index_col=0)
+    # shape:(61,731)
+    df_realdata = pd.read_csv(realdata_path, encoding='utf-8', index_col=0)
+    READDATA_COUNT = 64
+    # 实况拼接有问题需要手动去掉最后一列
+    # 使用按3小时进行分割的数据不需要去掉最后一列，这样 realdata 与 forecast 的 columns 一致
+    # df_realdata = df_realdata.drop(df_realdata.columns[-1], axis=1)
+    # TODO:[*] 25-07-13 注意此处由于数据处理存在bug，forecast 只有 [0,64] , 需调整为 [0,65]
+    """
+        df_forecast.shape: (64, 730)
+        df_realdata.shape: (64, 730)
+    """
+    df_forecast = df_forecast.iloc[:READDATA_COUNT, :]
+    df_realdata = df_realdata.iloc[:READDATA_COUNT, :]
+    print(f'df_forecast.shape: {df_forecast.shape}')
+    print(f'df_realdata.shape: {df_realdata.shape}')
+    pass
+    # step2: 由于数据中存在nan，如何处理nan
+    pass
+    # step3: 数据标准化(提出nan值)
+    rows: int = df_forecast.shape[0]
+    cols: int = df_forecast.shape[1]
+    # TODO:[-] 25-05-28 注意原始数据中: forecast (61,732), real (61,732)
+    X = df_forecast.values.T.reshape(cols, rows, 1)
+    # TODO:[*] 25-05-11 注意 y 中有存在 nan
+    y_real = df_realdata.values.T.reshape(cols, rows, 1)
+
+    # 计算残差作为新的目标
+    y_residual = y_real - X
+
+    # TODO: [*] 关键修正点：先划分数据集，再进行归一化
+
+    # step3-2: 先划分数据集
+    # X_* 相当于是 预报数据集 | y_* 是实况(验证)数据集
+    # 使用 y_residual 作为目标进行划分和归一化
+    # 注意：y_residual 的归一化需要一个新的 scaler_residual
+    # X 是特征数据。 X 的形状是 (730, 64, 1)，代表有730个预报样本，每个样本是一个长度为64小时的时间序列，每个时间步只有1个特征（预报风速）。
+    # y_residual 标签数据。它的形状也是 (730, 64, 1)，代表与X中每个样本一一对应的残差序列（实况 - 预报）。
+    """
+        X_* 特征
+        y_* 标签(验证数据集)
+        变量名 (Variable)	角色 (Role)	包含内容 (Content)	用途 (Purpose)	        中文比喻 (Analogy)
+        X_train	            训练特征	    数据集的80%特征	    输入给模型进行学习	        练习册的题目
+        y_train	            训练标签	    X_train对应的答案    	作为学习时的“标准答案”	    练习册的答案
+        X_test	            测试特征	    数据集的20%特征	    输入给训练好的模型进行预测	模拟考试的题目
+        y_test	            测试标签	    X_test对应的答案	    用来评估模型预测的准确性	    模拟考试的答案
+    """
+    X_train, X_test, y_train, y_test = train_test_split(X, y_residual, test_size=0.2, random_state=42)
+
+    # step3-3: 再进行归一化
+    # 创建归一化器
+    scaler_X = MinMaxScaler(feature_range=(0, 1))
+    scaler_y = MinMaxScaler(feature_range=(0, 1))
+
+    # --- 处理X (预报) ---
+    # 在训练集上 fit_transform
+    X_train_flat = X_train.reshape(-1, 1)
+    X_train_scaled_flat = scaler_X.fit_transform(X_train_flat)
+    X_train = X_train_scaled_flat.reshape(X_train.shape)
+
+    # 在测试集上只 transform
+    X_test_flat = X_test.reshape(-1, 1)
+    X_test_scaled_flat = scaler_X.transform(X_test_flat)
+    X_test = X_test_scaled_flat.reshape(X_test.shape)
+
+    # --- 处理y (实况) ---
+    # 在训练集上 fit_transform
+    y_train_flat = y_train.reshape(-1, 1)
+    y_train_scaled_flat = scaler_y.fit_transform(y_train_flat)
+    y_train = y_train_scaled_flat.reshape(y_train.shape)
+
+    # 在测试集上只 transform
+    y_test_flat = y_test.reshape(-1, 1)
+    y_test_scaled_flat = scaler_y.transform(y_test_flat)
+    y_test = y_test_scaled_flat.reshape(y_test.shape)
+
+    # 保存为后续使用而 fit 好的归一化器
+    joblib.dump(scaler_X, scaler_forecast)
+    joblib.dump(scaler_y, scaler_realdata)
+
+    # 此处加入转换
+
+    X_train = np.array(X_train, dtype=np.float32)
+    X_test = np.array(X_test, dtype=np.float32)
+    y_train = np.array(y_train, dtype=np.float32)
+    y_test = np.array(y_test, dtype=np.float32)
+
+    # step4: 构建模型
+    model = Sequential()
+    X_train = np.nan_to_num(X_train, nan=0.0)
+    X_test = np.nan_to_num(X_test, nan=0.0)
+    y_train = np.nan_to_num(y_train, nan=0.0)
+    y_test = np.nan_to_num(y_test, nan=0.0)
+    """
+        错误原因:
+            你在 Masking 层中设置了 input_shape=(25, 1)，这表示你期望输入数据的每个样本有 25 个时间步，每个时间步有 1 个特征。
+            然而，错误信息 found shape=(None, 72, 1) 清楚地表明，你的实际输入数据 X_train 和 X_test 的每个样本有 72 个时间步，而不是 25 个。
+            TODO:[-] 25-06-0 此处做了修改由于数据为 (61,732) 故 72 => 61
+
+    """
+    # 模型构建的步骤:
+    # step1: 添加一个 Masking 层，指定输入中值为 0.0 的时刻将被“屏蔽”，即这些时间步不会对后续层产生影响。
+    # TODO:[-] 25-06-12 屏蔽是会去掉该时刻的所有数据吗？
+    model.add(Masking(mask_value=0.0, input_shape=(64, 1)))
+    # step2: 添加双向LSTM层
+    # 双向 LSTM 同时从前向和后向处理时序数据，从而捕获更多上下文信息，提升特征提取能力。
+    # units=128：LSTM 层中每个方向上有 128 个神经元。
+    # return_sequences=True：输出每个时间步的结果，而非仅仅输出最后时刻的状态，这样可以将整个序列的信息传递到下一层。
+    # activation='relu'：将激活函数设置为 ReLU（而非 LSTM 默认的 tanh），可能有助于缓解梯度消失问题，不过这取决于具体任务。
+    # 注意：虽然此处指定了 input_shape=(25, 1)，但实际上在 Sequential 模型中第一层已经指定了输入形状，所以这里的 input_shape 参数可能是不必要或引起混淆（建议保持与 Masking 层一致，即 (61, 1)）。
+    # v1 激活函数:relu
+    # v2 改为: tanh
+    # V5 改为: tanh
+    model.add(Bidirectional(LSTM(units=128, return_sequences=True,
+                                 activation='tanh',
+                                 input_shape=(64, 1))))
+    # step3: 添加 Dropout 层，在训练时随机将 20% 的神经元输出设为 0。
+    # Dropout 是一种正则化方法，有助于防止模型过拟合；通过随机丢弃部分神经元，模型不能过分依赖局部特征，从而提高泛化能力。
+    model.add(Dropout(0.4))
+    model.add(Bidirectional(LSTM(units=64, return_sequences=True, activation='tanh')))  # 可以堆叠多个LSTM层
+    # step5: 再次添加一个 Dropout 层，使得第二层 LSTM 的输出在训练时有 20% 被随机置零，从而进一步防止过拟合。
+    model.add(Dropout(0.4))
+    # step4: 第二层双向LSTM层
+    model.add(Bidirectional(LSTM(units=32, return_sequences=True, activation='tanh')))  # 可以堆叠多个LSTM层
+    # step5: 再次添加一个 Dropout 层，使得第二层 LSTM 的输出在训练时有 20% 被随机置零，从而进一步防止过拟合。
+    model.add(Dropout(0.2))
+    # step6: 添加全连接层（Dense 层），输出节点数为 25。25-06-12 此处修改为 61 ，需要预测长度为61的时间向量
+    # Dense 层将前面的时序特征映射到目标空间。在时序网络中，当上层返回整个序列（形状为 [batch_size, time_steps, features]）时，Dense 层会被逐时步地应用，输出每个时间步对应一个长度为 25 的向量。这通常用于预测任务，比如多步预测或者每个时刻有多个目标值的任务。
+    # TODO:[*] 25-06-17 此处将最后一个全链接层节点数由 25 -> 1
+    model.add(Dense(1))
+
+    # 将均方误差修改为均方根误差后
+    # step7: 编译模型
+    # optimizer='adam' 使用 Adam 优化器进行梯度下降更新。Adam 优化器能够自适应调整各参数的学习率，通常能较快收敛，并且对超参数设定不太敏感，不同于传统的 SGD。
+    # TODO:[*] 25-06-12 什么是超参数？
+    # loss='mse' 将损失函数设为均方误差（Mean Squared Error），这是回归问题常用的误差度量指标，模型训练的目标就是尽可能使预测值与真实值之间的均方误差最小化。
+    # 整体作用 model.compile() 会对模型进行配置，指定训练时用哪个优化器、用哪个损失函数，如果需要，还可以添加额外的评估指标。编译过程会为模型建立必要的计算图，并对参数进行初始化。
+    model.compile(optimizer='adam',
+                  loss='mse',  # 损失函数总是会被加权（如果提供了权重）
+                  weighted_metrics=['mae', 'mse'])  # 告诉模型，mae和mse这两个验证指标也需要加权计算
+
+    # TODO:[*] 前25小时反而加大了原始预报误差，此处加入如下修改：
+    # --- 核心改进：为加权损失函数创建权重 ---
+    # 我们可以根据需求定义权重参数
+    high_weight = 2.0  # 为重点关注的时间步设置一个较高的权重
+    normal_weight = 1.0  # 其他时间步的正常权重
+    switch_point = 25  # 权重切换的时间点（前25个小时）
+
+    # 1. 创建用于训练的权重数组 (train_weights)
+    #    它的形状需要和 y_train 匹配 (样本数, 时间步)
+    #    y_train.shape[0] 是样本数量
+    #    y_train.shape[1] 是时间步数量 (61)
+    train_weights = np.ones((y_train.shape[0], y_train.shape[1]))
+
+    #    将前 switch_point 个时间步的权重设置为 high_weight
+    train_weights[:, :switch_point] = high_weight
+    print(f"创建训练权重数组，形状为: {train_weights.shape}")
+    print(f"前25小时的权重为: {train_weights[0, 24]}, 之后小时的权重为: {train_weights[0, 25]}")
+
+    # 2. 如果使用验证集，同样为验证集创建权重数组 (val_weights)
+    #    这样验证集的损失计算方式才和训练集保持一致，结果才具可比性
+    val_weights = np.ones((y_test.shape[0], y_test.shape[1]))
+    val_weights[:, :switch_point] = high_weight
+    print(f"创建验证权重数组，形状为: {val_weights.shape}")
+    # ---------------------------------------------
+
+    # step8: 训练模型
+    # X_train, y_train 分别为训练数据和对应目标值。模型将以这些数据为依据不断调整参数，使预测值与真实目标值之间的 MSE 最小化。
+    # epochs=10 指定训练过程需要遍历整个训练集 10 次。每个 epoch 内部数据会根据 batch 大小分批更新参数。
+    # batch_size=16 每个训练步骤（step）使用 16 个样本进行梯度计算和模型更新。较小的 batch size 有助于捕捉更多细微变化，但训练时间可能更长；较大的 batch size 则计算稳定但可能导致泛化性下降。
+    # validation_data=(X_test, y_test) 在每个 epoch 结束后，模型也会评估一次在验证集上的损失。这有助于监控过拟合情况以及训练过程的稳定性。
+    # 将 validation_data 从 (X_test, y_test) 修改为 (X_test, y_test, val_weights)
+    # + 25-07-13 sample_weight=train_weights, # 显式传递训练权重，代码更清晰
+    model.fit(X_train, y_train, epochs=10, batch_size=16,
+              validation_data=(X_test, y_test))
+    model.save(model_path)
+
+    pass
+
+    pass
+
+
+def main():
+    to_do()
+
+
+if __name__ == '__main__':
+    main()
