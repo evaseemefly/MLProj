@@ -150,3 +150,17 @@ def merge_dataframe(read_path: str) -> Optional[pd.DataFrame]:
             except Exception as e:
                 print(f'error reading {file}: {e}')
     return first_df
+
+
+def get_files(read_path: str):
+    """
+        获取指定路径下的所有文件
+    :param read_path:
+    :return:
+    """
+    files_name = [temp for temp in pathlib.Path(read_path).iterdir()]
+    files = []
+    for file_temp in files_name:
+        if file_temp.is_file():
+            files.append(file_temp)
+    return files
