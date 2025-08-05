@@ -99,17 +99,7 @@ def main():
     data_dir_path = pathlib.Path(dir_path)
     buoy_df = process_buoy_data_for_year(data_dir_path, year)
     # 3. 显示结果 (逻辑与之前相同)
-    if not buoy_df.empty:
-        print("\n成功生成的DataFrame信息如下：")
-        buoy_df.info()
-
-        print("\nDataFrame内容预览：")
-        print(buoy_df)
-
-        # 4保存到CSV文件
-        output_csv_path = str(pathlib.Path(out_put_path) / f"buoy_data_{code}_{year}.csv")
-        buoy_df.to_csv(output_csv_path, index=False, encoding='utf-8-sig')
-        print(f"\n数据已保存到文件: {output_csv_path}")
+    fub_source_list = list(pathlib.Path(dir_path).rglob('*.csv'))
 
 
 if __name__ == '__main__':
