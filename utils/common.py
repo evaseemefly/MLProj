@@ -1,5 +1,5 @@
 from typing import List, Optional
-
+import re
 import numpy as np
 import pandas as pd
 from pandas import DatetimeIndex
@@ -150,3 +150,109 @@ def merge_dataframe(read_path: str) -> Optional[pd.DataFrame]:
             except Exception as e:
                 print(f'error reading {file}: {e}')
     return first_df
+
+
+def batch_get_fubrealdata(file_full_path: str, split_hours=72, issue_hours_steps: int = 12) -> pd.DataFrame:
+    """
+        TODO:[-] 25-04-23 生成实况训练数据集
+        从指定文件批量获取时间数据并以dataframe的形式返回
+    :param file_full_path:
+    :return:
+    """
+
+    """
+        eg: csv文件样例:
+                        time	longitude	latitude	WS	YBG
+                        202401010000
+                        YYYYMMDDHHmm
+    """
+    list_series = []
+    merge_dict = {}
+    if pathlib.Path(file_full_path).exists():
+        # ds: xr.Dataset = xr.open_dataset(file_full_path)
+        df: pd.DataFrame = pd.read_csv(file_full_path)
+        """读取指定路径的浮标处理后的一年的数据"""
+        # 通过起止时间找到对应的index，然后每次的发布时间间隔步长为12h
+
+        # step1: 生成2024年一年的时间步长为1hour的时间索引集合
+        start_time = '2024-01-01 00:00:00'
+        end_time = '2024-12-31 23:00:00'
+        time_series = pd.date_range(start=start_time, end=end_time, freq='H')
+
+        # 将time列的内容从int64 => str
+        df['time'] = df['time'].astype(str)
+        df['time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M')
+        # step2: 将 time列设置为index，并将index替换为标准时间集合
+        df.set_index('time', inplace=True)
+        df_reindexed = df.reindex(time_series)
+        df_reindexed.index.name = 'time'
+
+        # step3: 生成12小时为间隔的时间数组
+        freq_str: str = f'{issue_hours_steps}H'
+        issue_dt_series = pd.date_range(start=start_time, end=end_time, freq=freq_str)
+
+        for temp_time in issue_dt_series:
+            temp_index: int = df_reindexed.index.get_loc(temp_time)
+            val_series = df_reindexed[temp_index:temp_index + split_hours]
+            list_series.append(val_series)
+        # TODO:[-] 25-04-24 此处做重新修改，拼接成一个dataframe
+
+        for temp_time in issue_dt_series:
+            dt_str: str = temp_time.strftime('%Y%m%d%H%M%S')
+            temp_index: int = df_reindexed.index.get_loc(temp_time)
+            val_series = df_reindexed[temp_index:temp_index + split_hours]
+            # 此处改为只取 'WS' 列
+            # TODO:[-] 25-04-24 住一次此处需要将每一个 series的index索引重置为 [0,71]
+            merge_dict[dt_str] = val_series['WS'].reset_index(drop=True)
+            # list_series.append(val_series)
+    df = pd.DataFrame.from_dict(merge_dict)
+    return df
+
+
+def dms2decimal(dms_str: str) -> Optional[float]:
+    """
+    将度分秒格式的经纬度字符串转换为小数格式。
+    支持格式如: '120°5.0′E', '39°2.0′N', '8°10.5′W' 等。
+
+    Args:
+        dms_str (str): 度分秒格式的字符串。
+
+    Returns:
+        float | None: 转换后的小数值，如果格式不正确则返回None。
+    """
+    # 检查输入是否为有效的字符串
+    if not isinstance(dms_str, str) or not dms_str.strip():
+        return None
+
+    # 正则表达式，用于匹配度、分和方向
+    # (\d+): 匹配并捕获度数 (一个或多个数字)
+    # °: 匹配度符号
+    # ([\d.]+): 匹配并捕获分数 (一个或多个数字或小数点)
+    # ′: 匹配分符号 (注意这不是单引号)
+    # ([NSEW]): 匹配并捕获方向 (N, S, E, 或 W)
+    pattern = re.compile(r"(\d+)°([\d.]+)′([NSEW])")
+    match = pattern.search(dms_str)
+
+    if not match:
+        # 如果格式不匹配，打印警告并返回None
+        print(f"警告：无法解析字符串 '{dms_str}'，格式不符合预期。")
+        return None
+
+    try:
+        # 从匹配结果中提取度、分、方向
+        degrees = float(match.group(1))
+        minutes = float(match.group(2))
+        direction = match.group(3)
+
+        # 核心转换公式：度 + (分 / 60)
+        decimal_val = degrees + (minutes / 60)
+
+        # 根据方向(N/S/E/W)确定正负号
+        if direction in ['S', 'W']:
+            decimal_val = -decimal_val
+
+        return decimal_val
+    except (ValueError, IndexError):
+        # 如果数字转换失败
+        print(f"警告：解析 '{dms_str}' 时发生数值转换错误。")
+        return None
