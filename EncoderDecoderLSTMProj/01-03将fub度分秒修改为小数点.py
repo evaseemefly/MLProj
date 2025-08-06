@@ -36,7 +36,7 @@ def main():
         source_file_name: str = fub_file.name.split('.')[0]
         convert_file_name: str = f'{source_file_name}_convert.csv'
         full_convert_file_path: str = str(pathlib.Path(out_put_path) / convert_file_name)
-        df.to_csv(full_convert_file_path, index=False)
+        df.to_csv(full_convert_file_path, index=False, encoding='utf-8-sig')
         print(f'输出:{full_convert_file_path}成功!')
         print("-" * 30)
     pass
