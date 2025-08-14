@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import arrow
 
 
 def copy_files_with_pathlib(source_dir, target_dir):
@@ -234,6 +235,74 @@ def convert_local2utc_wind(input_path: pathlib.Path, output_path: pathlib.Path):
         print('标准化处理失败!')
 
 
+def merge_daily2year(input_path: pathlib.Path, output_path: pathlib.Path):
+    """
+        将 input_put 文件 拼接为 ws | wd 两列，index为 2024 year , 1hour step
+    :param input_path:
+    :param output_path:
+    :return:
+    """
+    try:
+        input_path_str = str(input_path)
+        output_path_str = str(output_path)
+        # 读取原始数据
+        df_wide = pd.read_csv(input_path_str)
+    except FileNotFoundError:
+        print(f"错误：找不到文件 {input_path_str}")
+        return
+        # 用于存储每天处理后的小数据块（DataFrame）
+    all_data_frames = []
+
+    # 从列名中提取出所有唯一的日期字符串，并排序
+    # 例如：['20240101', '20240102', ...]
+    try:
+        date_strings = sorted(list(set([col.split('_')[0] for col in df_wide.columns])))
+    except IndexError:
+        print("错误：CSV文件列名格式不正确，应为 'YYYYMMDD_wd' 或 'YYYYMMDD_ws' 格式。")
+        return
+
+    print(f"开始处理数据，共找到 {len(date_strings)} 个日期...")
+
+    # 遍历每一个日期
+    for date_str in date_strings:
+        wd_col = f"{date_str}_wd"
+        ws_col = f"{date_str}_ws"
+
+        # 确保当天的数据列都存在
+        if wd_col in df_wide.columns and ws_col in df_wide.columns:
+            # 1. 提取当天的风向和风速数据
+            day_data = df_wide[[wd_col, ws_col]].copy()
+            day_data.columns = ['wd', 'ws']  # 重命名列
+
+            # 2. 生成正确的时间戳
+            # 根据规则，'20240101'的数据从'2023-12-31 21:00'开始
+            start_day_utc = arrow.get(date_str, 'YYYYMMDD', tzinfo='utc')
+            # 生成从 start_time 开始的24个小时间隔的时间序列
+            timestamps = pd.date_range(start=start_day_utc.datetime, periods=24, freq='H')
+
+            # 3. 将时间戳添加到数据中
+            day_data['dt'] = timestamps
+
+            # 将处理好的当天数据添加到列表中
+            all_data_frames.append(day_data)
+            print(f"已处理日期：{date_str}")
+
+    if not all_data_frames:
+        print("警告：未能处理任何数据，请检查输入文件和列名格式。")
+        return
+
+        # 4. 将所有小数据块垂直拼接成一个大的DataFrame
+    df_long = pd.concat(all_data_frames, ignore_index=True)
+
+    # 5. 调整列顺序并排序
+    df_long = df_long[['dt', 'wd', 'ws']]
+    df_long = df_long.sort_values(by='dt').reset_index(drop=True)
+
+    # 6. 保存到新的CSV文件
+    df_long.to_csv(output_path_str, index=False, encoding='utf-8-sig')
+    print(f"\n处理完成！数据已整合并保存至 {output_path_str}")
+
+
 # --- 使用示例 ---
 if __name__ == "__main__":
     # 请修改为您自己的路径
@@ -250,10 +319,22 @@ if __name__ == "__main__":
     # step3: 将 local time [-21,+20] 对应的[wd,ws] => utc time [0,23]
     input_station_path = pathlib.Path(save_dir) / '鲅鱼圈.csv'
     output_station_path = pathlib.Path(save_dir) / '鲅鱼圈_stand.csv'
+    # for file in pathlib.Path(save_dir).rglob('*.csv'):
+    #     source_file_name = file.name
+    #     convert_file_name = source_file_name.replace('.csv', '_standard.csv')
+    #     source_path = file
+    #     copy_file = pathlib.Path(convert_dir) / convert_file_name
+    #     convert_local2utc_wind(source_path, copy_file)
+
+    # step4: 尝试将 utc 时间按照24分段的数据集和成为整年的 ws | wd 数据集
+    merge_path = pathlib.Path(r'E:\01DATA\ML\海洋站数据处理\station_utctime')
+    merage_year_path = pathlib.Path(r'E:\01DATA\ML\海洋站数据处理\station_allyear_utc')
     for file in pathlib.Path(save_dir).rglob('*.csv'):
         source_file_name = file.name
-        convert_file_name = source_file_name.replace('.csv', '_standard.csv')
+        convert_file_name = source_file_name.replace('.csv', '_standard_allyear.csv')
         source_path = file
-        copy_file = pathlib.Path(convert_dir) / convert_file_name
-        convert_local2utc_wind(source_path, copy_file)
+        copy_file = pathlib.Path(merage_year_path) / convert_file_name
+        merge_daily2year(file, copy_file)
+    pass
+
     pass
