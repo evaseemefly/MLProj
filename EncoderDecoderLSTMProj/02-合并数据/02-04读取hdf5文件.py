@@ -24,7 +24,7 @@ def main(file_path: Path):
 
 
 if __name__ == '__main__':
-    file_path: Path = Path(r'E:\01DATA\ML\MERGEDATA_H5\STATIONS\2024_BYQ_mergedata.h5')
-    file_fub_merge_path: Path = Path(r'E:\01DATA\ML\MERGEDATA_H5\FUB\2024_MF02001_mergedata.h5')
-    main(file_path)
+    file_station: Path = Path(r'E:\01DATA\ML\MERGEDATA_H5\STATIONS\2024_BYQ_mergedata.h5')
+    file_fub: Path = Path(r'E:\01DATA\ML\MERGEDATA_H5\FUB\2024_MF01002_mergedata.h5')
+    main(file_fub)
     pass
