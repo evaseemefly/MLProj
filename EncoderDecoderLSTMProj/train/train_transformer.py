@@ -10,6 +10,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+import re  # 引入正则表达式模块
 
 # --- 1. 配置参数 ---
 # TODO: 使用新CONFIG
@@ -47,6 +48,23 @@ CONFIG["encoder_feature_num"] = NUM_SITES * 4
 CONFIG["decoder_feature_num"] = NUM_SITES * 2
 # 输出/目标特征: realdata_u, realdata_v
 CONFIG["output_feature_num"] = NUM_SITES * 2
+
+
+def parse_issuance_time_from_key(key):
+    """
+    从HDFStore的key (例如 '/fc_2024010100') 中解析出发布时间。
+    返回一个pandas Timestamp对象。
+    """
+    # 使用正则表达式查找连续的数字，假设格式是 YYYYMMDDHH
+    match = re.search(r'(\d{10})', key)
+    if match:
+        try:
+            # 解析为 datetime 对象，然后转换为带时区的 Timestamp
+            dt = pd.to_datetime(match.group(1), format='%Y%m%d%H')
+            return pd.Timestamp(dt, tz='UTC')  # 假设是UTC时间
+        except ValueError:
+            return None  # 如果格式不匹配，返回None
+    return None
 
 
 # --- 2. Transformer 模型定义 ---
@@ -121,17 +139,21 @@ class MultiSiteDataset(Dataset):
 
 
 # --- 4. 数据处理函数 ---
-
 def load_and_prepare_data(config):
-    """加载所有站点数据，合并、排序、填充缺失值"""
-    print("开始加载和整合数据...")
+    """
+        加载所有站点数据，将不同发布时间的预报横向拼接，然后合并所有站点。
+        TODO:[*] 25-11-03 修改了之前按照index进行纵向拼接并去重的逻辑错误。
+                     新策略：对单个文件内的不同发布时间(group)进行横向拼接。
+
+    :param config:
+    :return:
+    """
+    # TODO:[*] 修改了打印信息，以反映新的处理策略
+    print("开始加载和整合数据 (V3 - 横向拼接策略)...")
     all_dfs = []
 
-    # TODO: 根据新的CONFIG结构，分别构建浮标和海洋站的路径并加载数据
-    # 为了避免代码重复，我们先创建一个文件列表
+    # 文件列表构建逻辑保持不变
     files_to_load = []
-
-    # 1. 构建浮标文件列表
     buoy_base_path: Path = Path(config["data_path"]) / config["fub_relative_path"]
     for site_name in config["buoy_sites"]:
         files_to_load.append({
@@ -140,7 +162,6 @@ def load_and_prepare_data(config):
             "type": "浮标(buoy)"
         })
 
-    # 2. 构建海洋站文件列表
     station_base_path: Path = Path(config["data_path"]) / config["station_relative_path"]
     for site_name in config["station_sites"]:
         files_to_load.append({
@@ -149,76 +170,65 @@ def load_and_prepare_data(config):
             "type": "海洋站(station)"
         })
 
-    # 3. 统一循环加载所有文件
-    for file_info in tqdm(files_to_load, desc="读取H5文件"):
+    # TODO:[*] 修改了tqdm的描述信息
+    for file_info in tqdm(files_to_load, desc="读取H5文件并横向拼接"):
         site_name = file_info["site_name"]
         file_path = file_info["path"]
         try:
-            # TODO:[-] 25-10-28 修改为 使用 HDFStore 以只读模式('r')打开文件
             with pd.HDFStore(str(file_path), mode='r') as store:
-                # 假设时间是Unix时间戳或可以转换为datetime的格式
-                # 假设key是'data'，或者需要遍历找到
-                # 这里我们假设文件内直接是数据集
-                # 遍历文件中的每一个组（例如 '2024010100', '2024010112' ...）
-                # 创建一个临时列表，用于存放当前文件内所有组的数据
-                group_dfs = []
+                # TODO:[*] 逻辑重构：不再使用 group_dfs 进行纵向拼接
+                # 创建一个新列表，用于存放当前文件内所有经过重命名的组DataFrame
+                site_forecast_dfs = []
+
+                if not store.keys():
+                    print(f"警告: 文件 {file_path} 为空或不包含任何组。")
+                    continue
+
                 for key in store.keys():
                     try:
-                        # 访问当前组
+                        # TODO:[*] 1. 解析发布时间
+                        issuance_time_str = parse_issuance_time_from_key(key)
+                        if issuance_time_str is None:
+                            print(f"警告: 无法从组名 '{key}' (文件: {file_path}) 解析发布时间，已跳过。")
+                            continue
+
                         group_df: pd.DataFrame = store[key]
 
-                        # 从组内读取数据
-                        # 假设时间仍然是Unix时间戳
-                        # time = pd.to_datetime(group['time'][:], unit='s')
-                        #
-                        # # 为当前组的数据创建一个DataFrame
-                        # df_group = pd.DataFrame({
-                        #     'time': time,
-                        #     f'{site_name}_real_u': group['realdata_u'][:],
-                        #     f'{site_name}_real_v': group['realdata_v'][:],
-                        #     f'{site_name}_forecast_u': group['forecast_u'][:],
-                        #     f'{site_name}_forecast_v': group['forecast_v'][:],
-                        # })
-                        # --- 核心修改点 ---
-                        # 校验索引是否为DatetimeIndex，如果不是则跳过
                         if not isinstance(group_df.index, pd.DatetimeIndex):
                             print(f"警告: 文件 {file_path} 组 {key} 的索引不是时间类型，已跳过。")
                             continue
 
-                        group_dfs.append(group_df)
+                        # TODO:[*] 2. 创建唯一的列名，包含发布时间信息
+                        # 例如: 'realdata_u' -> 'realdata_u_issued_2024010100'
+                        rename_dict = {
+                            col: f'{col}_issued_{issuance_time_str}'
+                            for col in group_df.columns
+                        }
+                        group_df_renamed = group_df.rename(columns=rename_dict)
+
+                        # TODO:[*] 3. 将重命名后的DataFrame添加到待拼接列表
+                        site_forecast_dfs.append(group_df_renamed)
 
                     except KeyError as ke:
-                        # 如果某个组内缺少某个数据集，打印错误并跳过这个组
                         print(f"在文件 {file_path} 的组 {key} 中读取失败，缺少键: {ke}")
                         continue
 
-                # 如果成功读取了任何组的数据
-                if group_dfs:
-                    # 后续处理逻辑与之前版本相同，但现在更加可靠
-                    # 1. 垂直合并文件内的所有组
-                    single_site_df = pd.concat(group_dfs)
-                    # 2. 按时间索引排序
-                    single_site_df.sort_index(inplace=True)
-                    # 3. 处理可能因合并产生的重复时间索引，保留最后一个值
-                    single_site_df = single_site_df[~single_site_df.index.duplicated(keep='last')]
-                    # 4. 重命名列以包含站点名
-                    # 假设原始列名为 'realdata_u', 'realdata_v', 等
-                    # 如果您的列名已经是唯一的，可以跳过此步，但为了通用性，保留此逻辑
-                    rename_dict = {}
-                    # 动态检查列是否存在，避免KeyError
-                    for col in ['realdata_u', 'realdata_v', 'forecast_u', 'forecast_v']:
-                        if col in single_site_df.columns:
-                            rename_dict[col] = f'{site_name}_{col}'
-                    single_site_df.rename(columns=rename_dict, inplace=True)
+                # TODO:[*] 4. 逻辑重构：处理单个站点的所有预报
+                if site_forecast_dfs:
+                    # 4.1. 横向拼接单个站点的所有预报。Pandas会根据索引（预报有效时间）自动对齐
+                    single_site_df = pd.concat(site_forecast_dfs, axis=1)
 
-                    # 5. 将处理好的DataFrame添加到总列表中
+                    # 4.2. 为所有列添加站点名前缀，这是最终的列名
+                    # 例如: 'realdata_u_issued_2024010100' -> 'MF01002_realdata_u_issued_2024010100'
+                    single_site_df = single_site_df.add_prefix(f'{site_name}_')
+
+                    # 4.3. 将处理好的单个站点的完整DataFrame添加到总列表中
                     all_dfs.append(single_site_df)
                 else:
                     print(f"文件 {file_path} 中没有找到任何有效的数据组。")
         except Exception as e:
             print(f"读取 {file_info['type']} 文件 {file_path} 失败: {e}")
-            # 根据需要决定是否因为一个文件失败而终止整个流程
-            # return None
+            continue
 
     if not all_dfs:
         print("没有成功加载任何数据，请检查文件路径和H5文件内容。")
@@ -226,20 +236,22 @@ def load_and_prepare_data(config):
 
     # 合并所有数据
     print("合并所有站点数据...")
+    # TODO:[*] 这里的 axis=1 现在合并的是每个站点的宽表，功能正确，无需修改，但意义已变。
     merged_df = pd.concat(all_dfs, axis=1)
 
-    # 按时间排序并填充缺失值
+    # 按时间排序并填充缺失值 (这部分逻辑保持不变，依然适用)
     merged_df.sort_index(inplace=True)
+    print("填充缺失值 (forward fill)...")
     merged_df.fillna(method='ffill', inplace=True)
-    merged_df.fillna(method='bfill', inplace=True)  # 填充开头可能存在的NaN
+    print("填充缺失值 (backward fill)...")
+    merged_df.fillna(method='bfill', inplace=True)
 
     if merged_df.isnull().sum().sum() > 0:
-        print("警告：数据中仍存在缺失值，请检查数据源。")
+        print("警告：数据填充后仍存在缺失值，将用0填充。")
         merged_df.fillna(0, inplace=True)
 
     print("数据整合完成！")
     return merged_df
-
 
 def create_samples(df, config):
     """使用滑动窗口创建训练样本"""
