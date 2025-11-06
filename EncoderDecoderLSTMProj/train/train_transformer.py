@@ -15,7 +15,8 @@ import re  # 引入正则表达式模块
 # --- 1. 配置参数 ---
 # TODO: 使用新CONFIG
 CONFIG = {
-    "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
+    # "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
+    "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
     "fub_relative_path": "FUB",  # 浮标相对路径
     "station_relative_path": "STATIONS",  # 海洋站相对路径
     "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
@@ -65,6 +66,38 @@ def parse_issuance_time_from_key(key):
         except ValueError:
             return None  # 如果格式不匹配，返回None
     return None
+
+
+def parse_column_names(columns):
+    """
+    辅助函数：预解析所有列名，以提高主循环的效率。
+    返回一个包含列信息的DataFrame，并按发布时间排序。
+    """
+    print("正在预解析列名以提高效率...")
+    parsed_cols = []
+    # 正则表达式匹配 '站点_类型_变量_issued_时间戳' 格式
+    pattern = re.compile(r'(.+?)_(forecast|realdata)_(u|v)_issued_(.+)')
+
+    for col in columns:
+        match = pattern.match(col)
+        if match:
+            site, type, var, issue_time_str = match.groups()
+            issue_time = pd.to_datetime(issue_time_str)
+            parsed_cols.append({
+                'col_name': col,
+                'site': site,
+                'type': type,
+                'var': var,
+                'issue_time': issue_time
+            })
+
+    if not parsed_cols:
+        raise ValueError("无法从列名中解析出任何有效信息。请检查列名格式。")
+
+    df = pd.DataFrame(parsed_cols)
+    # 按发布时间排序，这对于后续查找“最新”预报至关重要
+    df.sort_values('issue_time', inplace=True)
+    return df
 
 
 # --- 2. Transformer 模型定义 ---
@@ -142,6 +175,8 @@ class MultiSiteDataset(Dataset):
 def load_and_prepare_data(config):
     """
         加载所有站点数据，将不同发布时间的预报横向拼接，然后合并所有站点。
+        步骤：
+            加载和构建宽表
         TODO:[*] 25-11-03 修改了之前按照index进行纵向拼接并去重的逻辑错误。
                      新策略：对单个文件内的不同发布时间(group)进行横向拼接。
 
@@ -216,6 +251,8 @@ def load_and_prepare_data(config):
                 # TODO:[*] 4. 逻辑重构：处理单个站点的所有预报
                 if site_forecast_dfs:
                     # 4.1. 横向拼接单个站点的所有预报。Pandas会根据索引（预报有效时间）自动对齐
+                    # TODO:[*] 25-11-05
+                    # shape:(2944, 2800)
                     single_site_df = pd.concat(site_forecast_dfs, axis=1)
 
                     # 4.2. 为所有列添加站点名前缀，这是最终的列名
@@ -240,55 +277,163 @@ def load_and_prepare_data(config):
     merged_df = pd.concat(all_dfs, axis=1)
 
     # 按时间排序并填充缺失值 (这部分逻辑保持不变，依然适用)
+    # TODO:[*] 25-11-05 shape: (2944, 14000)
     merged_df.sort_index(inplace=True)
-    print("填充缺失值 (forward fill)...")
-    merged_df.fillna(method='ffill', inplace=True)
-    print("填充缺失值 (backward fill)...")
-    merged_df.fillna(method='bfill', inplace=True)
 
-    if merged_df.isnull().sum().sum() > 0:
-        print("警告：数据填充后仍存在缺失值，将用0填充。")
-        merged_df.fillna(0, inplace=True)
+    # TODO:[-] 25-11-05 原始数据保留了每个预报的独立性和有效时间窗口，不应该进行fillna，会制造虚假数据，破坏特征的意义，此处不再进行缺省值的填充
+    # print("填充缺失值 (forward fill)...")
+    # merged_df.fillna(method='ffill', inplace=True)
+    # print("填充缺失值 (backward fill)...")
+    # merged_df.fillna(method='bfill', inplace=True)
+    #
+    # if merged_df.isnull().sum().sum() > 0:
+    #     print("警告：数据填充后仍存在缺失值，将用0填充。")
+    #     merged_df.fillna(0, inplace=True)
 
     print("数据整合完成！")
     return merged_df
 
-def create_samples(df, config):
-    """使用滑动窗口创建训练样本"""
-    print("开始创建滑动窗口样本...")
 
-    # 定义特征列
-    encoder_cols = []
-    decoder_cols = []
-    target_cols = []
-    for site in config["all_sites"]:
-        encoder_cols.extend([f'{site}_real_u', f'{site}_real_v', f'{site}_forecast_u', f'{site}_forecast_v'])
-        decoder_cols.extend([f'{site}_forecast_u', f'{site}_forecast_v'])
-        target_cols.extend([f'{site}_real_u', f'{site}_real_v'])
+def create_samples(merged_df: pd.DataFrame, config: dict):
+    """
+            从原始宽表中创建特征，并使用滑动窗口生成训练样本。
+    @param merged_df: - merged_df (pd.DataFrame): 从 load_and_prepare_data 得到的原始宽表。
+    @param config:     - config (dict): 包含 all_sites, encoder_seq_len, decoder_seq_len 等配置的字典。
+    @return:
+    - encoder_x (np.array): 编码器输入序列。
+    - decoder_x (np.array): 解码器输入序列。
+    - target_y (np.array): 目标序列。
+    - scaler (StandardScaler): 用于数据标准化的 scaler 对象。
+    - feature_df.columns (pd.Index): 返回特征列名，便于后续分析。
+    """
 
-    # 数据标准化
+    # =========================================================================
+    # Part 1: 特征工程 - 将原始宽表转换为干净的特征表
+    # =========================================================================
+    print("Part 1: 开始特征工程，从原始数据中提取干净特征...")
+
+    # 1.1 预解析列名以提高效率
+    col_info_df = parse_column_names(merged_df.columns)
+
+    # 1.2 创建一个空的特征DataFrame，索引与原始df一致
+    feature_df = pd.DataFrame(index=merged_df.index)
+
+    # 1.3 遍历每个站点，为其提取真实值和最新的预报值
+    for site in tqdm(config["all_sites"], desc="为每个站点提取特征"):
+        site_cols_info = col_info_df[col_info_df['site'] == site].copy()
+
+        # --- 提取真实值 (realdata) ---
+        """
+            处理真实值与处理预报数据处理方式不同
+            对于真实值：
+                对于同一个时间点（例如 2024-01-01 12:00:00），它的真实风速值是唯一的、确定的。
+                理论上，这个值在上述三个文件中都应该被记录，且完全相同。
+        """
+        for var in ['u', 'v']:
+            real_cols = site_cols_info[(site_cols_info['type'] == 'realdata') & (site_cols_info['var'] == var)][
+                'col_name']
+            if not real_cols.empty:
+                # 使用 bfill(axis=1) 高效地将每行的第一个非NaN值填充到整行，然后取第一列。
+                # TODO:[*] 25-11-06 注意此处可能存在问题：若第一列的实况数据并不完整，若后面几列有实况值，应如何处理
+                """
+                    merged_df[real_cols]：选出所有相关的真实数据列。对于 2024-01-01 10:00:00 这一行，数据是 [5.1, NaN, NaN]。
+                    .bfill(axis=1)：水平向后填充。[5.1, NaN, NaN] 保持不变，因为第一个就是有效值。
+                    .iloc[:, 0]：取第一列。结果是 5.1。
+                    
+                    对于 2024-01-02 08:00:00 这一行，数据是 [NaN, 4.8, 4.8]。                    
+                    .bfill(axis=1)：水平向后填充，[NaN, 4.8, 4.8] 变为 [4.8, 4.8, 4.8]。
+                    .iloc[:, 0]：取第一列。结果是 4.8。
+                """
+                feature_df[f'{site}_real_{var}'] = merged_df[real_cols].bfill(axis=1).iloc[:, 0]
+
+        # --- 提取最新的预报值 (forecast) ---
+        # 这是一个高效的向量化实现，避免了逐行循环。
+        for var in ['u', 'v']:
+            forecast_cols_info = site_cols_info[(site_cols_info['type'] == 'forecast') & (site_cols_info['var'] == var)]
+
+            if forecast_cols_info.empty:
+                # 如果该站点没有预报数据，则创建一个全为NaN的列
+                feature_df[f'{site}_forecast_{var}'] = np.nan
+                continue
+
+            # 创建一个空的Series来存放每个时间点的最新预报
+            latest_forecast = pd.Series(np.nan, index=merged_df.index)
+
+            # 遍历按发布时间排序的预报列
+            for _, row in forecast_cols_info.iterrows():
+                col_name = row['col_name']
+                # 使用 update 方法。由于我们是按发布时间从旧到新遍历，
+                # 后续的（更新的）预报会覆盖掉旧的预报值。
+                # 最终，在每个时间点上留下的就是最新的有效预报。
+                latest_forecast.update(merged_df[col_name])
+
+            feature_df[f'{site}_forecast_{var}'] = latest_forecast
+
+    print(f"\n特征工程完成。创建的特征表 feature_df 的形状: {feature_df.shape}")
+    print(f"特征列示例: {feature_df.columns[:4].tolist()}...")
+
+    # =========================================================================
+    # Part 2: 滑动窗口 - 在干净的特征表上创建样本
+    # =========================================================================
+    print("\nPart 2: 开始创建滑动窗口样本...")
+
+    # 2.1 处理缺失值
+    # 在滑动窗口前，用0填充所有NaN。更复杂的策略（如插值）也可以在这里应用。
+    feature_df.fillna(0, inplace=True)
+
+    # 2.2 数据标准化
     scaler = StandardScaler()
-    scaled_data = scaler.fit_transform(df)
-    scaled_df = pd.DataFrame(scaled_data, index=df.index, columns=df.columns)
+    scaled_data = scaler.fit_transform(feature_df)
 
-    encoder_x, decoder_x, target_y = [], [], []
+    # 2.3 定义编码器、解码器和目标的特征列
+    all_sites = config["all_sites"]
+    encoder_features = [f"{site}_{ftype}_{var}" for site in all_sites for ftype in ["real", "forecast"] for var in
+                        ["u", "v"]]
+    decoder_features = [f"{site}_forecast_{var}" for site in all_sites for var in ["u", "v"]]
+    target_features = [f"{site}_real_{var}" for site in all_sites for var in ["u", "v"]]
 
-    total_len = len(scaled_df)
-    enc_len = config["encoder_seq_len"]
-    dec_len = config["decoder_seq_len"]
+    # 获取这些特征在 scaled_data 中的列索引
+    df_cols = feature_df.columns.tolist()
+    encoder_indices = [df_cols.index(col) for col in encoder_features]
+    decoder_indices = [df_cols.index(col) for col in decoder_features]
+    target_indices = [df_cols.index(col) for col in target_features]
 
-    for i in tqdm(range(total_len - enc_len - dec_len + 1), desc="生成样本"):
+    # 2.4 创建滑动窗口样本
+    encoder_seq_len = config["encoder_seq_len"]
+    decoder_seq_len = config["decoder_seq_len"]
+
+    encoder_x_list, decoder_x_list, target_y_list = [], [], []
+
+    total_len = len(scaled_data)
+    window_len = encoder_seq_len + decoder_seq_len
+
+    for i in tqdm(range(total_len - window_len + 1), desc="生成样本"):
+        # 编码器输入：历史数据
         encoder_start = i
-        encoder_end = i + enc_len
-        decoder_start = encoder_end
-        decoder_end = encoder_end + dec_len
+        encoder_end = i + encoder_seq_len
+        encoder_x_list.append(scaled_data[encoder_start:encoder_end, encoder_indices])
 
-        encoder_x.append(scaled_df.iloc[encoder_start:encoder_end][encoder_cols].values)
-        decoder_x.append(scaled_df.iloc[decoder_start:decoder_end][decoder_cols].values)
-        target_y.append(scaled_df.iloc[decoder_start:decoder_end][target_cols].values)
+        # 解码器输入：未来的预报数据
+        decoder_start = encoder_end - 1  # 从编码器最后一步开始
+        decoder_end = decoder_start + decoder_seq_len
+        decoder_x_list.append(scaled_data[decoder_start:decoder_end, decoder_indices])
 
-    print(f"样本生成完毕，共 {len(encoder_x)} 个样本。")
-    return np.array(encoder_x), np.array(decoder_x), np.array(target_y), scaler
+        # 目标：未来的真实数据
+        target_start = encoder_end
+        target_end = target_start + decoder_seq_len
+        target_y_list.append(scaled_data[target_start:target_end, target_indices])
+
+    # 2.5 将列表转换为Numpy数组
+    encoder_x = np.array(encoder_x_list)
+    decoder_x = np.array(decoder_x_list)
+    target_y = np.array(target_y_list)
+
+    print(f"\n样本创建完成。")
+    print(f"编码器输入 (Encoder X) 形状: {encoder_x.shape}")
+    print(f"解码器输入 (Decoder X) 形状: {decoder_x.shape}")
+    print(f"目标 (Target Y) 形状: {target_y.shape}")
+
+    return encoder_x, decoder_x, target_y, scaler, feature_df.columns
 
 
 # --- 5. 主训练流程 ---
