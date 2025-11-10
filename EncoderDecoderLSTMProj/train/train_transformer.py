@@ -15,12 +15,14 @@ import re  # 引入正则表达式模块
 # --- 1. 配置参数 ---
 # TODO: 使用新CONFIG
 CONFIG = {
-    # "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
-    "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
+    "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
+    # "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
     "fub_relative_path": "FUB",  # 浮标相对路径
     "station_relative_path": "STATIONS",  # 海洋站相对路径
-    "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
-    "station_sites": ['BYQ', 'CFD', 'CST', 'DGG', 'LHT', 'PLI', 'QHD', 'TGU', 'WFG'],  # 海洋站文件名
+    # "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
+    "buoy_sites": ['MF01002', 'MF01004'],  # 浮标站文件名（不含.h5）
+    # "station_sites": ['BYQ', 'CFD', 'CST', 'DGG', 'LHT', 'PLI', 'QHD', 'TGU', 'WFG'],  # 海洋站文件名
+    "station_sites": ['BYQ', 'CST', 'DGG'],  # 海洋站文件名
 
     # 序列长度
     "encoder_seq_len": 24,  # 过去24小时
@@ -381,30 +383,82 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
     # 在滑动窗口前，用0填充所有NaN。更复杂的策略（如插值）也可以在这里应用。
     feature_df.fillna(0, inplace=True)
 
+    # TODO:[*] 25-11-10 生成 编码器 | 解码器 list 均需要通过 滑动窗口长度 遍历 截取 scaled_data。scaled_data的作用是什么？ (2944, 20)
     # 2.2 数据标准化
+    # 它会改变 feature_df 中每个特征（每一列）的分布，使其均值为0，标准差为1。
     scaler = StandardScaler()
     scaled_data = scaler.fit_transform(feature_df)
 
     # 2.3 定义编码器、解码器和目标的特征列
     all_sites = config["all_sites"]
+    """
+        编码器  : 预报 | 实况
+        => 
+        解码器  : 预报
+        =>
+        目标值  : 实况
+    """
+
+    """
+        ['MF01002_real_u', 'MF01002_real_v', 'MF01002_forecast_u', 'MF01002_forecast_v',
+         'MF01004_real_u', 'MF01004_real_v', 'MF01004_forecast_u', 'MF01004_forecast_v',
+          'BYQ_real_u', 'BYQ_real_v', 'BYQ_forecast_u', 'BYQ_forecast_v', 
+          'CST_real_u', 'CST_real_v', 'CST_forecast_u', 'CST_forecast_v', 
+          'DGG_real_u', 'DGG_real_v', 'DGG_forecast_u', 'DGG_forecast_v']
+          ————————————————————————————————————————
+          编码器特征值 包含 实况数据 与 预报数据
+    """
     encoder_features = [f"{site}_{ftype}_{var}" for site in all_sites for ftype in ["real", "forecast"] for var in
                         ["u", "v"]]
+    """
+        ['MF01002_forecast_u', 'MF01002_forecast_v', 
+        'MF01004_forecast_u', 'MF01004_forecast_v', 
+        'BYQ_forecast_u', 'BYQ_forecast_v', 
+        'CST_forecast_u', 'CST_forecast_v', 
+        'DGG_forecast_u', 'DGG_forecast_v']
+        ————————————————————————————————————————
+        解码器器特征值 包含 预报数据
+    """
     decoder_features = [f"{site}_forecast_{var}" for site in all_sites for var in ["u", "v"]]
+    """
+        ['MF01002_real_u', 'MF01002_real_v', 
+        'MF01004_real_u', 'MF01004_real_v', 
+        'BYQ_real_u', 'BYQ_real_v', 
+        'CST_real_u', 'CST_real_v',
+         'DGG_real_u', 'DGG_real_v']
+         ————————————————————————————————————————
+         目标特征值 包含 实况数据
+    """
     target_features = [f"{site}_real_{var}" for site in all_sites for var in ["u", "v"]]
 
     # 获取这些特征在 scaled_data 中的列索引
+
+    """
+        ['MF01002_real_u', 'MF01002_real_v','MF01002_forecast_u', 'MF01002_forecast_v', 
+        'MF01004_real_u', 'MF01004_real_v', 'MF01004_forecast_u', 'MF01004_forecast_v', 
+        'BYQ_real_u', 'BYQ_real_v', 'BYQ_forecast_u', 'BYQ_forecast_v', 
+        'CST_real_u', 'CST_real_v', 'CST_forecast_u', 'CST_forecast_v', 
+        'DGG_real_u', 'DGG_real_v', 'DGG_forecast_u', 'DGG_forecast_v']
+    """
     df_cols = feature_df.columns.tolist()
+
+    # 以下为 编码器 | 解码器 | 目标值
+    # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     encoder_indices = [df_cols.index(col) for col in encoder_features]
+    # [2, 3, 6, 7, 10, 11, 14, 15, 18, 19]
     decoder_indices = [df_cols.index(col) for col in decoder_features]
+    # [0, 1, 4, 5, 8, 9, 12, 13, 16, 17]
     target_indices = [df_cols.index(col) for col in target_features]
 
+    # TODO:[*] 25-11-10 滑动窗口设置为 24 是否合适？可否延长，而且预报时间间隔也不是1小时，是3小时。
     # 2.4 创建滑动窗口样本
     encoder_seq_len = config["encoder_seq_len"]
     decoder_seq_len = config["decoder_seq_len"]
 
     encoder_x_list, decoder_x_list, target_y_list = [], [], []
-
+    # 2944
     total_len = len(scaled_data)
+    # 48
     window_len = encoder_seq_len + decoder_seq_len
 
     for i in tqdm(range(total_len - window_len + 1), desc="生成样本"):
