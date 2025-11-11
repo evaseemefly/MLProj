@@ -383,9 +383,17 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
     # 在滑动窗口前，用0填充所有NaN。更复杂的策略（如插值）也可以在这里应用。
     feature_df.fillna(0, inplace=True)
 
-    # TODO:[*] 25-11-10 生成 编码器 | 解码器 list 均需要通过 滑动窗口长度 遍历 截取 scaled_data。scaled_data的作用是什么？ (2944, 20)
+    # TODO:[-] 25-11-10 生成 编码器 | 解码器 list 均需要通过 滑动窗口长度 遍历 截取 scaled_data。scaled_data的作用是什么？ (2944, 20)
+    # StandardScaler 的作用是进行特征标准化。简单来说，它会改变 feature_df 中每个特征（每一列）的分布，使其均值为0，标准差为1。
     # 2.2 数据标准化
     # 它会改变 feature_df 中每个特征（每一列）的分布，使其均值为0，标准差为1。
+    # 注意: 1- 并不会修改 shape ; 2- feature_df 是 dataframe , scaled_data 是 numpy.ndarray
+    """
+        StandardScaler 做的是 Z-score 标准化，它的目标是：
+        使每一列的均值变为 0。
+        使每一列的标准差变为 1。
+    """
+    # shape:(2944, 20)
     scaler = StandardScaler()
     scaled_data = scaler.fit_transform(feature_df)
 
@@ -455,6 +463,11 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
     encoder_seq_len = config["encoder_seq_len"]
     decoder_seq_len = config["decoder_seq_len"]
 
+    """
+        encoder_x_list 2897 组 (24,20)
+        decoder_x_list 2897 组 (24,10)
+        target_y_list  2897 组 (24,10)
+    """
     encoder_x_list, decoder_x_list, target_y_list = [], [], []
     # 2944
     total_len = len(scaled_data)
