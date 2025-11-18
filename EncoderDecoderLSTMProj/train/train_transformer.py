@@ -474,6 +474,15 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
     # 48
     window_len = encoder_seq_len + decoder_seq_len
 
+    """
+        使用“滑动窗口”方法，从连续的时间序列数据 (scaled_data) 中，生成大量用于训练 Seq2Seq 模型的样本。
+        我们可以把它想象成一个“样本制造工厂”。这个工厂沿着时间轴一点一点地移动，每移动一步，就生产出一个包含三部分内容的“训练包”。
+            encoder_x: 编码器输入 (历史上下文)
+            decoder_x: 解码器输入 (未来的“提示”)
+            target_y: 目标输出 (未来的“答案”)
+        
+        * : 通过在长时序数据上滑动一个固定长度的窗口，将一个单一的时间序列问题，转化为成千上万个监督学习的“输入-输出”对。
+    """
     for i in tqdm(range(total_len - window_len + 1), desc="生成样本"):
         # 编码器输入：历史数据
         encoder_start = i
@@ -491,6 +500,16 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
         target_y_list.append(scaled_data[target_start:target_end, target_indices])
 
     # 2.5 将列表转换为Numpy数组
+    """
+        encoder_x.shape: (2897, 24, 20)
+        decoder_x.shape: (2897, 24, 10)
+        target_y.shape: (2897, 24, 10)
+        编码器（Encoder）的输入特征被设计为包含最全面的历史信息，而解码器（Decoder）和目标（Target）则只关注未来的特定信息。
+        encoder_x: 10个 真实（Real）特征：过去24小时内，每个站点实际观测到的风速、风向等数据;10个 预报（Forecast）特征：过去24小时内，数值天气预报模型对这些时间的预报值。
+        decoder_x: 未来24个时刻的10个预报数据。
+        target_y:  10个真实（Real）特征。
+    """
+
     encoder_x = np.array(encoder_x_list)
     decoder_x = np.array(decoder_x_list)
     target_y = np.array(target_y_list)
@@ -513,9 +532,18 @@ def main():
         return
 
     # 2. 创建样本
-    encoder_x, decoder_x, target_y, scaler = create_samples(merged_df, CONFIG)
+    encoder_x, decoder_x, target_y, scaler, columns = create_samples(merged_df, CONFIG)
 
     # 3. 划分数据集
+    # 按照 8:2 的比例，随机分成了两部分：一个训练集和一个验证集。
+    """
+        enc_x_train: 用于训练的编码器输入数据 (占总数据的80%)
+        enc_x_val: 用于验证的编码器输入数据 (占总数据的20%)
+        dec_x_train: 用于训练的解码器输入数据 (占总数据的80%)
+        dec_x_val: 用于验证的解码器输入数据 (占总数据的20%)
+        y_train: 用于训练的目标真实值 (占总数据的80%)
+        y_val: 用于验证的目标真实值 (占总数据的20%)
+    """
     (enc_x_train, enc_x_val,
      dec_x_train, dec_x_val,
      y_train, y_val) = train_test_split(
