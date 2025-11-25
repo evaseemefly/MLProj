@@ -11,12 +11,15 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 import re  # 引入正则表达式模块
+# [New] 1. 引入 SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 # --- 1. 配置参数 ---
 # TODO: 使用新CONFIG
 CONFIG = {
-    "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
+    # "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
     # "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
+    "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
     "fub_relative_path": "FUB",  # 浮标相对路径
     "station_relative_path": "STATIONS",  # 海洋站相对路径
     # "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
@@ -24,8 +27,11 @@ CONFIG = {
     # "station_sites": ['BYQ', 'CFD', 'CST', 'DGG', 'LHT', 'PLI', 'QHD', 'TGU', 'WFG'],  # 海洋站文件名
     "station_sites": ['BYQ', 'CST', 'DGG'],  # 海洋站文件名
 
+    # 我的预报时间间隔为3小时，实况的时间间隔也为三小时
+    # eg: 2024-01-01 00 ——61个预报时次—— 01-01 00h -> 01-11 00h
     # 序列长度
-    "encoder_seq_len": 24,  # 过去24小时
+
+    "encoder_seq_len": 24,  # 过去24小时 TODO:[*] 25-11-24 编码器的输入时间可调整为48或61，此处可先设置为24
     "decoder_seq_len": 24,  # 未来24小时
 
     # 模型参数
@@ -162,6 +168,12 @@ class TimeSeriesTransformer(nn.Module):
 
 class MultiSiteDataset(Dataset):
     def __init__(self, encoder_x, decoder_x, target_y):
+
+        """
+        它将输入的 NumPy 数组转换成 PyTorch 的张量（Tensor）。
+        Tensor 是 PyTorch 中进行所有计算（尤其是在 GPU 上）的基本数据单位。
+        可以把它看作是 PyTorch 世界里的 NumPy ndarray。
+        """
         self.encoder_x = torch.FloatTensor(encoder_x)
         self.decoder_x = torch.FloatTensor(decoder_x)
         self.target_y = torch.FloatTensor(target_y)
@@ -550,32 +562,71 @@ def main():
         encoder_x, decoder_x, target_y, test_size=0.2, random_state=42
     )
 
+    # 25-11-19 可提供gpu加速的tensors
     train_dataset = MultiSiteDataset(enc_x_train, dec_x_train, y_train)
     val_dataset = MultiSiteDataset(enc_x_val, dec_x_val, y_val)
+
+    pass
 
     train_loader = DataLoader(train_dataset, batch_size=CONFIG["batch_size"], shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=CONFIG["batch_size"], shuffle=False)
 
     # 4. 初始化模型、损失函数、优化器
     model = TimeSeriesTransformer(CONFIG).to(CONFIG["device"])
+    # 定义损失函数
+    # 采用：均方误差损失 (Mean Squared Error Loss)
     criterion = nn.MSELoss()
+    # 创建优化器（Optimizer），即指导模型如何根据“考试分数”来调整自身知识的“辅导老师”。
+    # Adam: 一种非常流行且强大的优化算法。它结合了其他两种算法（Momentum 和 RMSprop）的优点
+    # 能够在训练过程中为不同的参数自适应地调整学习率，通常收敛速度快且效果稳定。
+    # lr: 学习率
     optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
 
     print("开始训练模型...")
     for epoch in range(CONFIG["epochs"]):
+        # 切换到学习模式
         model.train()
+        # 当前 epoch 的损失清零（初始化）
         train_loss = 0
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{CONFIG['epochs']}")
 
+        # src, tgt, target 分别是这个批次中的 输入序列、解码器输入和真实目标值。
         for src, tgt, target in progress_bar:
+            # 以下为训练的核心代码：
+            # 反向传播和梯度下降的核心
+
+            # TODO:[*] 25-11-20 ?
+            """
+                一些问题:
+                    -1 数据上载是在干什么
+                    -2 有前向传播和反向传播是 LSTM 特有的吗？
+                        不是。 这是所有**深度学习（神经网络）**通用的机制。 无论是 CNN（处理图像）、LSTM/Transformer（处理时间序列）还是简单的全连接网络，都需要：
+                        前向传播算结果。
+                        反向传播算梯度（找误差来源）。
+                    -3 为什么需要同时 正向 和 反向 传播？
+            """
+            # 1. 数据上载
             src, tgt, target = src.to(CONFIG["device"]), tgt.to(CONFIG["device"]), target.to(CONFIG["device"])
-
+            # 2. 清空旧梯度
+            # 在每次计算新一批数据的梯度之前，必须清空上一次计算的梯度。否则，梯度会累加，导致错误的更新方向。
             optimizer.zero_grad()
-
+            # 3. 前向传播 (做题)
+            # 将一批输入数据 src 和 tgt 喂给模型，模型根据其当前的内部参数，
+            # 进行一系列复杂的计算，最终给出一个预测结果 output。
             output = model(src, tgt)
+            # 4. 计算损失 (评分)
+            # 用我们预设的评分标准（MSELoss），
+            # 比较模型的预测 output 和标准答案 target，
+            # 计算出两者之间的差距，得到一个数值 loss。这个值越高，说明模型错得越离谱。
             loss = criterion(output, target)
-
+            # 5. 反向传播 (反思错误)
+            # PyTorch的自动求导引擎会根据 loss 值，
+            # 自动计算出模型中每一个参数（权重和偏置）对这个 loss 的“贡献度”，即梯度（gradient）。
+            # 这个梯度指明了调整参数的方向：沿着这个方向调整，loss 会下降得最快。
             loss.backward()
+            # 6. 更新参数 (纠正知识)
+            # 优化器（optimizer）根据上一步计算出的梯度，
+            # 并结合学习率（learning rate），对模型的所有参数进行一次微小的调整。
             optimizer.step()
 
             train_loss += loss.item()
@@ -584,15 +635,26 @@ def main():
         avg_train_loss = train_loss / len(train_loader)
 
         # 验证
+        # 切换到“考试模式”。
         model.eval()
         val_loss = 0
+        # 这是一个上下文管理器，告诉 PyTorch 的计算引擎：在这个缩进块里，不需要计算梯度（Gradient）。
+        """
+            省显存、提速度：计算梯度是为了更新参数（反向传播），验证阶段我们不更新模型参数，所以不需要记录复杂的计算图。这能极大地减少内存占用并加快运算速度。
+
+            防止意外学习：确保模型在这个阶段绝对不会“偷偷学习”验证集的数据，保证测试的公平性。
+        """
         with torch.no_grad():
             for src, tgt, target in val_loader:
+                # 将一批验证数据搬到GPU上。
                 src, tgt, target = src.to(CONFIG["device"]), tgt.to(CONFIG["device"]), target.to(CONFIG["device"])
+                # 模型进行前向传播，对新题目给出自己的答案。
                 output = model(src, tgt)
+                # 将模型的答案与标准答案进行比较，计算出这一批题目的得分（损失）。
                 loss = criterion(output, target)
+                # 将当前这批题目的损失累加到总损失中。.item() 方法是将一个只包含单个值的PyTorch张量（如 loss）转换为一个标准的Python数字，这样可以防止梯度信息的累积，进一步节省内存。
                 val_loss += loss.item()
-
+        # 计算在整个验证集上的平均损失。
         avg_val_loss = val_loss / len(val_loader)
 
         print(f"Epoch {epoch + 1}: Train Loss = {avg_train_loss:.6f}, Val Loss = {avg_val_loss:.6f}")
