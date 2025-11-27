@@ -10,6 +10,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+from arrow import Arrow
 import re  # 引入正则表达式模块
 # [New] 1. 引入 SummaryWriter
 from torch.utils.tensorboard import SummaryWriter
@@ -47,7 +48,11 @@ CONFIG = {
     "epochs": 20,
     "learning_rate": 0.0001,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
+
 }
+
+MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
+
 # 计算总站点数和特征数
 CONFIG["all_sites"] = CONFIG["buoy_sites"] + CONFIG["station_sites"]
 NUM_SITES = len(CONFIG["all_sites"])
@@ -168,7 +173,6 @@ class TimeSeriesTransformer(nn.Module):
 
 class MultiSiteDataset(Dataset):
     def __init__(self, encoder_x, decoder_x, target_y):
-
         """
         它将输入的 NumPy 数组转换成 PyTorch 的张量（Tensor）。
         Tensor 是 PyTorch 中进行所有计算（尤其是在 GPU 上）的基本数据单位。
@@ -546,6 +550,8 @@ def main():
     # 2. 创建样本
     encoder_x, decoder_x, target_y, scaler, columns = create_samples(merged_df, CONFIG)
 
+    # TODO:[-] 25-11-25 对于时间序列数据，不能进行随机打乱
+    # 时间序列数据具有先后依赖关系。如果随机打乱，验证集中可能会包含训练集之后的数据点，也可能包含训练集之前的数据点。这会导致数据泄露 (Data Leakage)。模型会“预知未来”，在验证集上表现得非常好，但在实际未来的应用中表现很差。
     # 3. 划分数据集
     # 按照 8:2 的比例，随机分成了两部分：一个训练集和一个验证集。
     """
@@ -556,11 +562,23 @@ def main():
         y_train: 用于训练的目标真实值 (占总数据的80%)
         y_val: 用于验证的目标真实值 (占总数据的20%)
     """
-    (enc_x_train, enc_x_val,
-     dec_x_train, dec_x_val,
-     y_train, y_val) = train_test_split(
-        encoder_x, decoder_x, target_y, test_size=0.2, random_state=42
-    )
+    # (enc_x_train, enc_x_val,
+    #  dec_x_train, dec_x_val,
+    #  y_train, y_val) = train_test_split(
+    #     encoder_x, decoder_x, target_y, test_size=0.2, random_state=42
+    # )
+    # 计算划分点索引
+    train_size = int(len(encoder_x) * 0.8)
+    # 按顺序切片
+    enc_x_train = encoder_x[:train_size]
+    enc_x_val = encoder_x[train_size:]
+    dec_x_train = decoder_x[:train_size]
+    dec_x_val = decoder_x[train_size:]
+    y_train = target_y[:train_size]
+    y_val = target_y[train_size:]
+    print(f"数据集划分完成 (按时间顺序):")
+    print(f"训练集样本数: {len(enc_x_train)}")
+    print(f"验证集样本数: {len(enc_x_val)}")
 
     # 25-11-19 可提供gpu加速的tensors
     train_dataset = MultiSiteDataset(enc_x_train, dec_x_train, y_train)
@@ -581,6 +599,19 @@ def main():
     # 能够在训练过程中为不同的参数自适应地调整学习率，通常收敛速度快且效果稳定。
     # lr: 学习率
     optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
+
+    # TODO:[-] 25-11-25
+    #  [New] 2. 初始化 TensorBoard Writer
+    # log_dir 定义日志保存路径，加入时间戳以区分不同的实验
+    now = Arrow.now()
+    # time.strftime("%Y%m%d-%H%M%S")
+    timestamp = now.format("YYYYMMDD-HHmmss")
+    log_dir = f"runs/grapes_correction_{timestamp}"
+    writer = SummaryWriter(log_dir=log_dir)
+    print(f"TensorBoard 日志将保存至: {log_dir}")
+
+    # [New] 全局步数计数器 (用于记录 Step 级别的 Loss)
+    global_step = 0
 
     print("开始训练模型...")
     for epoch in range(CONFIG["epochs"]):
@@ -632,6 +663,12 @@ def main():
             train_loss += loss.item()
             progress_bar.set_postfix({'loss': loss.item()})
 
+            # TODO:[-] 25-11-25
+            # [New] 3. 记录每个 Batch (Step) 的训练 Loss
+            # 这能让你看到 Loss 在一个 Epoch 内部是如何震荡下降的
+            writer.add_scalar('Loss/Train_Step', loss.item(), global_step)
+            global_step += 1
+
         avg_train_loss = train_loss / len(train_loader)
 
         # 验证
@@ -659,9 +696,21 @@ def main():
 
         print(f"Epoch {epoch + 1}: Train Loss = {avg_train_loss:.6f}, Val Loss = {avg_val_loss:.6f}")
 
+        # [New] 4. 记录每个 Epoch 的平均 Loss (对比训练集和验证集)
+        # add_scalars 可以将两条曲线画在同一张图上，方便对比过拟合情况
+        writer.add_scalars('Loss/Epoch_Average', {
+            'Train': avg_train_loss,
+            'Validation': avg_val_loss
+        }, epoch)
+
+    # [New] 5. 训练结束，关闭 Writer
+    writer.close()
+
+    saved_model_path: Path = MODEL_PATH / 'multi_site_transformer.pth'
+
     # 6. 保存模型
-    torch.save(model.state_dict(), "multi_site_transformer.pth")
-    print("模型已保存到 multi_site_transformer.pth")
+    torch.save(model.state_dict(), str(saved_model_path))
+    print(f"模型已保存到 {str(saved_model_path)}")
 
 
 if __name__ == "__main__":
