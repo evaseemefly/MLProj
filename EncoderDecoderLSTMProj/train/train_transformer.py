@@ -19,8 +19,9 @@ from torch.utils.tensorboard import SummaryWriter
 # TODO: 使用新CONFIG
 CONFIG = {
     # "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
+    "data_path": r"H:/DATA/ML/MERGEDATA_H5",  # 读取根目录
     # "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
-    "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
+    # "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
     "fub_relative_path": "FUB",  # 浮标相对路径
     "station_relative_path": "STATIONS",  # 海洋站相对路径
     # "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
@@ -41,7 +42,7 @@ CONFIG = {
     "num_encoder_layers": 4,
     "num_decoder_layers": 4,
     "dim_feedforward": 512,
-    "dropout": 0.1,
+    "dropout": 0.2,
 
     # 训练参数
     "batch_size": 32,
@@ -51,7 +52,8 @@ CONFIG = {
 
 }
 
-MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
+# MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
+MODEL_PATH = Path(r'H:/DATA/ML/MODEL/251127/')
 
 # 计算总站点数和特征数
 CONFIG["all_sites"] = CONFIG["buoy_sites"] + CONFIG["station_sites"]
@@ -155,6 +157,12 @@ class TimeSeriesTransformer(nn.Module):
         self.fc_out = nn.Linear(config["d_model"], config["output_feature_num"])
 
     def forward(self, src, tgt):
+        # TODO:[(] 25-11-27
+        # RuntimeError: CUDA error: no kernel image is available for execution on the device
+        # CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+        # For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+        # Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+        # python-BaseException
         src = self.encoder_embedding(src) * math.sqrt(self.config["d_model"])
         src = self.pos_encoder(src.transpose(0, 1)).transpose(0, 1)
 
@@ -411,7 +419,8 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
     """
     # shape:(2944, 20)
     scaler = StandardScaler()
-    scaled_data = scaler.fit_transform(feature_df)
+    # TODO:[*] 25-12-03 数据泄露风险 (Data Leakage) ———— 可暂时先不修复
+    scaled_data = scaler.fit_transform(feature_df) # 使用了所有数据计算均值和方差
 
     # 2.3 定义编码器、解码器和目标的特征列
     all_sites = config["all_sites"]
@@ -506,7 +515,13 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
         encoder_x_list.append(scaled_data[encoder_start:encoder_end, encoder_indices])
 
         # 解码器输入：未来的预报数据
-        decoder_start = encoder_end - 1  # 从编码器最后一步开始
+        # TODO:[-] 25-12-03 解码器输入 和 目标输出 存在一个小时步长的错位
+        # 为了预测 T时刻 的实况 (Target)，你喂给解码器的是 T-1时刻 的预报 (Decoder Input)。
+        # 标准的 Transformer（如机器翻译）需要错位是因为它要根据“上一个词”预测“下一个词”。
+        # 但我的任务是 “残差订正” (Forecast -> Real)，即根据 T时刻的预报 来修正得到 T时刻的实况。
+        # 错位会导致模型试图用“3小时前的预报”去修正“当前的实况”，这增加了学习难度且不符合物理逻辑。
+        # 修改后 => 将 decoder_start 对齐到 target_start。
+        decoder_start = encoder_end  # 从编码器最后一步开始
         decoder_end = decoder_start + decoder_seq_len
         decoder_x_list.append(scaled_data[decoder_start:decoder_end, decoder_indices])
 
@@ -598,7 +613,8 @@ def main():
     # Adam: 一种非常流行且强大的优化算法。它结合了其他两种算法（Momentum 和 RMSprop）的优点
     # 能够在训练过程中为不同的参数自适应地调整学习率，通常收敛速度快且效果稳定。
     # lr: 学习率
-    optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
+    # TODO:[*] 25-12-04 ?
+    optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"], weight_decay=1e-4)
 
     # TODO:[-] 25-11-25
     #  [New] 2. 初始化 TensorBoard Writer
@@ -614,6 +630,8 @@ def main():
     global_step = 0
 
     print("开始训练模型...")
+    # TODO:[-] 25-12-04 初始化最佳验证损失为无穷大
+    best_val_loss = float('inf')  # <--- 添加这一行
     for epoch in range(CONFIG["epochs"]):
         # 切换到学习模式
         model.train()
@@ -644,6 +662,14 @@ def main():
             # 3. 前向传播 (做题)
             # 将一批输入数据 src 和 tgt 喂给模型，模型根据其当前的内部参数，
             # 进行一系列复杂的计算，最终给出一个预测结果 output。
+
+            """
+                RuntimeError: CUDA error: no kernel image is available for execution on the device
+                CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+                For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+                Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+            """
+
             output = model(src, tgt)
             # 4. 计算损失 (评分)
             # 用我们预设的评分标准（MSELoss），
@@ -703,10 +729,22 @@ def main():
             'Validation': avg_val_loss
         }, epoch)
 
+        # ==========================================
+        # TODO:[-] 25-12-04 A步骤：保存最佳模型逻辑 (Best Model Checkpoint)
+        # ==========================================
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            # 定义最佳模型的文件名
+            best_model_path = MODEL_PATH / 'multi_site_transformer_best.pth'
+            # 保存模型
+            torch.save(model.state_dict(), str(best_model_path))
+            print(f"★ 发现性能提升！已保存最佳模型 (Val Loss: {best_val_loss:.6f})")
+        # ==========================================
+
     # [New] 5. 训练结束，关闭 Writer
     writer.close()
 
-    saved_model_path: Path = MODEL_PATH / 'multi_site_transformer.pth'
+    saved_model_path: Path = MODEL_PATH / 'multi_site_transformer_251204_V2.pth'
 
     # 6. 保存模型
     torch.save(model.state_dict(), str(saved_model_path))
