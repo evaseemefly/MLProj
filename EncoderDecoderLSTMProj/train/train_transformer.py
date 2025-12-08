@@ -19,9 +19,9 @@ from torch.utils.tensorboard import SummaryWriter
 # TODO: 使用新CONFIG
 CONFIG = {
     # "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
-    "data_path": r"H:/DATA/ML/MERGEDATA_H5",  # 读取根目录
+    # "data_path": r"H:/DATA/ML/MERGEDATA_H5",  # 读取根目录
     # "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
-    # "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
+    "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
     "fub_relative_path": "FUB",  # 浮标相对路径
     "station_relative_path": "STATIONS",  # 海洋站相对路径
     # "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
@@ -52,8 +52,8 @@ CONFIG = {
 
 }
 
-# MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
-MODEL_PATH = Path(r'H:/DATA/ML/MODEL/251127/')
+MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
+# MODEL_PATH = Path(r'H:/DATA/ML/MODEL/251127/')
 
 # 计算总站点数和特征数
 CONFIG["all_sites"] = CONFIG["buoy_sites"] + CONFIG["station_sites"]
@@ -735,7 +735,7 @@ def main():
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             # 定义最佳模型的文件名
-            best_model_path = MODEL_PATH / 'multi_site_transformer_best.pth'
+            best_model_path = MODEL_PATH / 'multi_site_transformer_best_gpu.pth'
             # 保存模型
             torch.save(model.state_dict(), str(best_model_path))
             print(f"★ 发现性能提升！已保存最佳模型 (Val Loss: {best_val_loss:.6f})")
@@ -744,7 +744,7 @@ def main():
     # [New] 5. 训练结束，关闭 Writer
     writer.close()
 
-    saved_model_path: Path = MODEL_PATH / 'multi_site_transformer_251204_V2.pth'
+    saved_model_path: Path = MODEL_PATH / 'multi_site_transformer_251208_V2_gpu.pth'
 
     # 6. 保存模型
     torch.save(model.state_dict(), str(saved_model_path))
