@@ -44,21 +44,21 @@ def inverse_transform_data(scaler, data_scaled, feature_indices, total_features)
 def evaluate():
     # 1. 准备数据 (必须与训练时完全一致，以保证 Scaler 相同)
     print("正在加载数据用于评估...")
-    # merged_df = load_and_prepare_data(CONFIG)
-    # # 注意：这里会重新生成 scaler，必须保证逻辑与训练时一致
-    # encoder_x, decoder_x, target_y, scaler, columns = create_samples(merged_df, CONFIG)
-    #
-    # # 划分出验证集 (取后20%)
-    # train_size = int(len(encoder_x) * 0.8)
-    #
-    # # 我们只评估验证集的数据
-    # test_enc = encoder_x[train_size:]
-    # test_dec = decoder_x[train_size:]
-    # test_y = target_y[train_size:]
-    #
-    # # 转为 Tensor
-    # dataset = MultiSiteDataset(test_enc, test_dec, test_y)
-    # loader = DataLoader(dataset, batch_size=32, shuffle=False)
+    merged_df = load_and_prepare_data(CONFIG)
+    # 注意：这里会重新生成 scaler，必须保证逻辑与训练时一致
+    encoder_x, decoder_x, target_y, scaler, columns = create_samples(merged_df, CONFIG)
+
+    # 划分出验证集 (取后20%)
+    train_size = int(len(encoder_x) * 0.8)
+
+    # 我们只评估验证集的数据
+    test_enc = encoder_x[train_size:]
+    test_dec = decoder_x[train_size:]
+    test_y = target_y[train_size:]
+
+    # 转为 Tensor
+    dataset = MultiSiteDataset(test_enc, test_dec, test_y)
+    loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
     # 2. 加载模型
     # 注意评估时在跨平台设备进行评估会出现如下错误:
@@ -70,7 +70,7 @@ def evaluate():
     read_model_path: Path = MODEL_PATH / 'multi_site_transformer_251204_V2.pth'
     model = TimeSeriesTransformer(CONFIG).to(CONFIG["device"])
     # 加载权重
-    model.load_state_dict(torch.load(str(read_model_path)), map_location=torch.device('cpu'))
+    model.load_state_dict(torch.load(str(read_model_path)))
     model.eval()
 
     # 3. 进行推理

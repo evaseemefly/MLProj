@@ -19,9 +19,9 @@ from torch.utils.tensorboard import SummaryWriter
 # TODO: 使用新CONFIG
 CONFIG = {
     # "data_path": r"E:/01DATA/ML/MERGEDATA_H5",  # 读取根目录
-    # "data_path": r"H:/DATA/ML/MERGEDATA_H5",  # 读取根目录
+    "data_path": r"H:/DATA/ML/MERGEDATA_H5",  # 读取根目录
     # "data_path": r"/Volumes/WD_BLACK/ML/MERGEDATA_H5",  # 读取根目录
-    "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
+    # "data_path": r"/Volumes/DRCC_DATA/DATA/ML/MERGEDATA_H5",  # macbook 读取根目录
     "fub_relative_path": "FUB",  # 浮标相对路径
     "station_relative_path": "STATIONS",  # 海洋站相对路径
     # "buoy_sites": ['MF01002', 'MF01004', 'MF02001', 'MF02004'],  # 浮标站文件名（不含.h5）
@@ -52,8 +52,8 @@ CONFIG = {
 
 }
 
-MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
-# MODEL_PATH = Path(r'H:/DATA/ML/MODEL/251127/')
+# MODEL_PATH = Path(r'/Volumes/DRCC_DATA/DATA/ML/MODEL/251127/')
+MODEL_PATH = Path(r'H:/DATA/ML/MODEL/251127/')
 
 # 计算总站点数和特征数
 CONFIG["all_sites"] = CONFIG["buoy_sites"] + CONFIG["station_sites"]
@@ -420,7 +420,7 @@ def create_samples(merged_df: pd.DataFrame, config: dict):
     # shape:(2944, 20)
     scaler = StandardScaler()
     # TODO:[*] 25-12-03 数据泄露风险 (Data Leakage) ———— 可暂时先不修复
-    scaled_data = scaler.fit_transform(feature_df) # 使用了所有数据计算均值和方差
+    scaled_data = scaler.fit_transform(feature_df)  # 使用了所有数据计算均值和方差
 
     # 2.3 定义编码器、解码器和目标的特征列
     all_sites = config["all_sites"]
