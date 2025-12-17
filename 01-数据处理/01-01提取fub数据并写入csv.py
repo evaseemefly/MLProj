@@ -7,9 +7,14 @@ from pathlib import Path
 
 # ================= 配置区域 =================
 # 浮标列表
-FUBS = ['MF01001', 'MF01002']
+FUBS = [
+    # 'MF01001',
+    # 'MF01002',
+    'MF01004'
+]
 # 数据的根目录 (父级)
-BASE_ROOT = r'E:/01DATA/SOURCE/FUB'
+# BASE_ROOT = r'E:/01DATA/SOURCE/FUB'
+BASE_ROOT = r'/Users/evaseemefly/03data/02fub/source'
 YEAR = 2024
 
 
@@ -100,6 +105,7 @@ def parse_xml_file(filepath):
         return None
 
     return data_dict
+
 
 def process_buoy(buoy_id, time_range):
     """
