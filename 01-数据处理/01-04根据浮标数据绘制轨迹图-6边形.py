@@ -62,42 +62,47 @@ def main():
     outliers_count = len(df_clean) - len(df_plot)
     print(f"剔除了 {outliers_count} 个异常漂移/错误点 (如 0,0 坐标)")
 
+    # 剔除后的df shape 为：
+    # (5926, 120)
+    # 共5926个时刻的轨迹
     # 3. 重新计算精确的平均位置 (基于过滤后的数据)
     final_mean_lat = df_plot['Lat_Decimal'].mean()
     final_mean_lon = df_plot['Lon_Decimal'].mean()
 
     # 4. 绘图
-    plt.figure(figsize=(10, 8), dpi=120)  # 稍微调大 DPI
+    plt.figure(figsize=(10, 8), dpi=120)
 
-    time_colors = np.linspace(0, 1, len(df_plot))
+    # === 【修改点】使用 hexbin (六边形分箱图) ===
+    # gridsize: 控制格子的密度。数值越大，格子越小，越精细。建议设为 40-60。
+    # cmap='YlOrRd': 颜色映射，Yellow -> Orange -> Red (由浅黄到深红)。
+    # mincnt=1: 计数为0的格子不显示颜色（透明/白色）。
+    hb = plt.hexbin(df_plot['Lon_Decimal'], df_plot['Lat_Decimal'],
+                    gridsize=50, cmap='YlOrRd', mincnt=1,
+                    edgecolors='none')  # edgecolors='none' 去掉格子边框，看起来更像连续热图
 
-    # s=30 把点调大一点，alpha=0.4 让重叠部分更明显
-    sc = plt.scatter(df_plot['Lon_Decimal'], df_plot['Lat_Decimal'],
-                     c=time_colors, cmap='viridis',
-                     s=30, alpha=0.4, label='Daily Position')
+    # 添加颜色条，显示具体的点数
+    cb = plt.colorbar(hb, label='Point Count (Density)')
+    # ==========================================
 
-    plt.scatter(final_mean_lon, final_mean_lat, c='red', marker='*', s=300,
-                label='Mean Position', zorder=10, edgecolors='black')
+    # 绘制平均位置（红色五角星）
+    # 为了防止红色五角星混入背景的红色热图中，建议给五角星加个明显的黑边，或者换成青色/蓝色
+    plt.scatter(final_mean_lon, final_mean_lat, c='cyan', marker='*', s=300,
+                label='Mean Position', zorder=10, edgecolors='black', linewidth=1.5)
 
-    # 5. 动态设置坐标轴范围 (让图表只显示浮标周围)
-    # 在数据范围基础上再向外扩一点点 (0.005度 ≈ 500米) 留白
+    # 5. 动态设置坐标轴范围
     margin = 0.005
     plt.xlim(df_plot['Lon_Decimal'].min() - margin, df_plot['Lon_Decimal'].max() + margin)
     plt.ylim(df_plot['Lat_Decimal'].min() - margin, df_plot['Lat_Decimal'].max() + margin)
 
-    # 强制不使用科学计数法 (防止坐标轴显示不直观)
     plt.ticklabel_format(useOffset=False, style='plain')
 
-    plt.title(f'Buoy Watch Circle (Filtered)\nValid Data: {len(df_plot)} points', fontsize=14)
+    plt.title(f'Buoy Density Heatmap (Hexbin)\nValid Data: {len(df_plot)} points', fontsize=14)
     plt.xlabel('Longitude (°)')
     plt.ylabel('Latitude (°)')
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend()
-    plt.colorbar(sc, label='Time (Start -> End)')
+    plt.grid(True, linestyle='--', alpha=0.3)  # 网格线淡一点，不要干扰热图
+    plt.legend()  # 显示五角星的图例
 
-    # 保持比例尺一致 (非常重要，否则圆会变成椭圆)
     plt.axis('equal')
-
     plt.tight_layout()
     plt.show()
 

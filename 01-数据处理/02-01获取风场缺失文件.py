@@ -9,7 +9,8 @@ YEAR = 2024
 
 # ===========================================
 
-def check_missing_files(out_put_file: str, wind_stamp: str = 'GRAPES'):
+def check_missing_files(out_put_file: str, wind_stamp: str = 'GRAPES', file_header: str = 'global_gfs_det_atm',
+                        file_footer: str = ''):
     # 1. 生成 2024 全年的标准时间序列 (频率: 12H, 即 00 和 12)
     # 2024是闰年，有366天
     # 开始时间: 2024-01-01 00:00 UTC
@@ -33,7 +34,7 @@ def check_missing_files(out_put_file: str, wind_stamp: str = 'GRAPES'):
         # zhongyuan_ecmwf_det_atm_2024123112.nc
         # dt.strftime('%Y%m%d%H') 会生成如 2024010100
         # file_name = f"{wind_stamp}_{dt.strftime('%Y%m%d%H')}_240h_UV.nc"
-        file_name = f"zhongyuan_ecmwf_det_atm_{dt.strftime('%Y%m%d%H')}.nc"
+        file_name = f"{file_header}_{dt.strftime('%Y%m%d%H')}{file_footer}.nc"
         file_path = os.path.join(DATA_DIR, file_name)
 
         # 3. 判断文件是否存在
@@ -69,7 +70,9 @@ def check_missing_files(out_put_file: str, wind_stamp: str = 'GRAPES'):
 
 if __name__ == "__main__":
 
-    wind_stamp = 'ECMWF'
+    wind_stamp = 'GRAPES'
+    wind_file_header = 'GRAPES'
+    wind_file_footer = '_240h_UV'
     # 数据存储的根目录
     DATA_DIR = f'/Volumes/DATA/WIND/{wind_stamp}/2024'
     # 输出缺失列表的CSV文件名
@@ -78,4 +81,4 @@ if __name__ == "__main__":
     if not os.path.exists(DATA_DIR):
         print(f"错误: 目录不存在 - {DATA_DIR}")
     else:
-        check_missing_files(out_put_file, wind_stamp)
+        check_missing_files(out_put_file, wind_stamp, wind_file_header, wind_file_footer)
